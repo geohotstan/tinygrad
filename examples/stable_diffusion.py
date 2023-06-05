@@ -457,7 +457,7 @@ class CLIPTextTransformer:
 
   def __call__(self, input_ids):
     x = self.embeddings(input_ids, list(range(len(input_ids))))
-    causal_attention_mask = Tensor.full((1,1,77,77), fill_value=float(-3.4028235e+38), device=x.device).triu(k=1, inf_mask=True)
+    causal_attention_mask = Tensor.full((1,1,77,77), fill_value=float("-inf"), device=x.device).triu(k=1, inf_mask=True)
     x = self.encoder(x, causal_attention_mask)
     return self.final_layer_norm(x)
 
