@@ -145,9 +145,8 @@ class Transformer:
     freqs_cis = self.freqs_cis[:, start_pos:start_pos+seqlen].contiguous().realize()
 
     if seqlen > 1:
-      mask = Tensor.full((1, 1, seqlen, start_pos + seqlen), float("-inf"), dtype=dtypes.float32)
+      mask = Tensor.full((1, 1, seqlen, start_pos + seqlen), float("-inf"))
       mask = mask.triu(k=start_pos+1, inf_mask=True) 
-      print(mask.numpy())
     else:
       mask = None
 
