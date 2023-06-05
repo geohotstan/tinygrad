@@ -502,6 +502,14 @@ class TestOps(unittest.TestCase):
     helper_test_op([()], lambda x: x.flatten(), lambda x: x.flatten())
     helper_test_op([(1,)], lambda x: x.flatten(), lambda x: x.flatten())
 
+  def test_triu(self):
+    helper_test_op([(4,3,6,6)], lambda x: torch.triu(x, diagonal=1), lambda x: x.triu(k=1))
+    helper_test_op([], lambda: torch.triu(torch.full((4,3,6,6), fill_value=float("-inf")), diagonal=1), lambda: Tensor.full((4,3,6,6), float("-inf")).triu(k=1, inf_mask=True), forward_only=True)
+
+  def test_tril(self):
+    helper_test_op([(4,3,6,6)], lambda x: torch.tril(x, diagonal=0), lambda x: x.tril(k=0))
+    helper_test_op([], lambda: torch.tril(torch.full((4,3,6,6), fill_value=float("-inf")), diagonal=0), lambda: Tensor.full((4,3,6,6), float("-inf")).tril(k=0, inf_mask=True), forward_only=True)
+
   def test_detach(self):
     helper_test_op([(4,3,6,6)], lambda x: x.detach(), lambda x: x.detach(), forward_only=True)
     helper_test_op([()], lambda x: x.detach(), lambda x: x.detach(), forward_only=True)

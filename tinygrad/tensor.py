@@ -349,6 +349,9 @@ class Tensor:
     return self.permute(order)
   def flatten(self, start_dim=0): return self.reshape(shape=tuple(list(self.shape[0:start_dim]) + [-1]))
 
+  def _tri(self:Tensor, r:int, c:int, k:int=0) -> Tensor: return Tensor.arange(r).unsqueeze(1).expand(r,c) <= Tensor.arange(c-k, start=-k).unsqueeze(0).expand(r,c)
+  def triu(self:Tensor, k:int=0, inf_mask:bool=False) -> Tensor: return self._tri(*self.shape[-2:], k).where(self, Tensor.zeros_like(self)) if not inf_mask else self ** self._tri(*self.shape[-2:], k) - 1
+  def tril(self:Tensor, k:int=0, inf_mask:bool=False) -> Tensor: return self._tri(*self.shape[-2:], k=k+1).where(Tensor.zeros_like(self), self) if not inf_mask else self ** -(self._tri(*self.shape[-2:], k+1) - 1) - 1
   # ***** reduce ops *****
 
   def _reduce(self, fxn:Type[Function], axis:Optional[Union[int, Tuple[int, ...]]]=None, keepdim=False):

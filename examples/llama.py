@@ -10,7 +10,7 @@ from tqdm import tqdm
 np.set_printoptions(linewidth=200)
 from typing import Optional, Tuple
 
-from tinygrad.helpers import getenv, DEBUG
+from tinygrad.helpers import getenv, DEBUG, dtypes
 from tinygrad.lazy import Device
 from extra.helpers import Timing
 from tinygrad.tensor import Tensor
@@ -145,9 +145,9 @@ class Transformer:
     freqs_cis = self.freqs_cis[:, start_pos:start_pos+seqlen].contiguous().realize()
 
     if seqlen > 1:
-      mask = np.full((1, 1, seqlen, start_pos + seqlen), float("-inf"), dtype=np.float32)
-      mask = np.triu(mask, k=start_pos + 1)  # TODO: this is hard to do in tinygrad
-      mask = Tensor(mask)
+      mask = Tensor.full((1, 1, seqlen, start_pos + seqlen), float("-inf"), dtype=dtypes.float32)
+      mask = mask.triu(k=start_pos+1, inf_mask=True) 
+      print(mask.numpy())
     else:
       mask = None
 

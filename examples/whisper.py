@@ -88,9 +88,8 @@ class TextDecoder:
 
     seqlen, start_pos = x.shape[1], 0
 
-    mask = np.full((1, 1, seqlen, start_pos + seqlen), float("-inf"), dtype=np.float32)
-    mask = np.triu(mask, k=start_pos + 1)  # TODO: this is hard to do in tinygrad
-    mask = Tensor(mask)
+    mask = Tensor.full((1, 1, seqlen, start_pos + seqlen), float("-inf"))
+    mask = mask.triu(k=start_pos+1, inf_mask=True) 
 
     for block in self.blocks: x = block(x, xa, mask)
     x = self.ln(x)
