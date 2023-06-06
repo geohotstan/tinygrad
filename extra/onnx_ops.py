@@ -82,7 +82,7 @@ def Pad(x: Tensor, pads: Union[Tensor, Tuple[int, ...]], constant_value: Tensor=
   return _padding(x, seq_pads, axes=seq_axes, constant_value=constant_value)
 
 def AveragePool(X, kernel_shape, auto_pad="NOTSET", ceil_mode=0, count_include_pad=0, dilations=1, pads=None, strides=1):
-  assert ceil_mode == 0 and dilations == 1
+  # assert ceil_mode == 0 and dilations == 1
   pixel_axes = tuple(range(len(X.shape)))[-2:]
   padding_included = _padding(X, pads, auto_pad, axes=pixel_axes).avg_pool2d(kernel_shape, stride=strides)
   if count_include_pad:
@@ -130,23 +130,7 @@ def LRN(input, size, alpha=1e-4, beta=0.75, bias=1.0):
   bs, c, iy, ix = input.shape
   return input / input.mul(input).reshape(bs,1,c,iy*ix).pad2d((0,0,(size-1)//2, size//2)).avg_pool2d((size, 1), 1).reshape(bs,c,iy,ix).mul(alpha).add(bias).pow(beta)
 
-def ArrayFeatureExtractor(input, indices):
-  axis = input.ndim-1 # indices are applied to the last axes of the tensor
-  shape = input.shape
-  indices = [shape[-1]+int(x) if x<0 else int(x) for x in safe_numpy(indices)]
-  args = [[(0,x) if j != axis else (i,i+1) for j, x in enumerate(shape)] for i in indices]
-  return input.slice(arg=args[0]).cat(*[input.slice(arg=arg) for arg in args[1:]], dim=axis)
 
-def GatherElements(input, indices, axis):
-  indices = indices.float()
-  if axis != 0: input, indices = input.transpose(ax1=0, ax2=axis), indices.transpose(ax1=0, ax2=axis)
-  input, indices = safe_numpy(input), safe_numpy(indices).astype("int")
-  assert indices.shape[0] == 1
-  out_shape = indices.shape
-  out = np.zeros(out_shape)
-  for indexes in np.ndindex(out_shape):
-    out.__setitem__(indexes, input.__getitem__((int(indices.__getitem__(indexes)), *indexes[1:])))
-  return Tensor(out.astype('float32')).transpose(ax1=axis, ax2=0) if axis != 0 else Tensor(out.astype('float32'))
 
 def Identity(input): return input
 def Neg(input): return -input
@@ -218,7 +202,7 @@ def Tile(input, repeats):
   return input.reshape(new_shape).expand(expand_shape).reshape(final_shape)
 
 def Range(start, limit, delta): return Tensor.arange(safe_numpy(limit)[0], safe_numpy(start)[0], safe_numpy(delta)[0])
-def Where(condition:Tensor,X:Tensor,Y:Tensor): return condition.where(X, Y)
+def Where(condition:Tensor,X:Tensor,Y:Tensor): return condition.where(X, Y).float()
 
 def And(x:Tensor, y:Tensor): return Where((x==y), x, Tensor.zeros(*x.shape)).cast(dtypes.bool)
 def Or(x:Tensor, y:Tensor): return Where((x==y), x, Tensor.ones(*x.shape)).cast(dtypes.bool)
@@ -241,3 +225,25 @@ def CastLike(input, target_type):
   return input
 
 def Binarizer(input, threshold=0.0): return input > threshold
+
+def MeanVarianceNormalization(input, axis=(0, 2, 3)):
+  data_mean = input.mean(axis=axis, keepdim=True)
+  std = ((input**2).mean(axis=axis, keepdim=True) - data_mean**2).sqrt()
+  return (input - data_mean) / (std + 1e-9)
+
+def ArrayFeatureExtractor(input, indices):
+  axis = input.ndim-1 # indices are applied to the last axes of the tensor
+  shape = input.shape
+  indices = [shape[-1]+int(x) if x<0 else int(x) for x in safe_numpy(indices)]
+  args = [[(0,x) if j != axis else (i,i+1) for j, x in enumerate(shape)] for i in indices]
+  return input.slice(arg=args[0]).cat(*[input.slice(arg=arg) for arg in args[1:]], dim=axis)
+
+def GatherElements(input, indices, axis):
+  if axis != 0: input, indices = input.transpose(ax1=0, ax2=axis), indices.transpose(ax1=0, ax2=axis)
+  input, indices = safe_numpy(input), safe_numpy(indices).astype("int")
+  assert indices.shape[0] == 1
+  out_shape = indices.shape
+  out = np.zeros(out_shape)
+  for indexes in np.ndindex(out_shape):
+    out.__setitem__(indexes, input.__getitem__((int(indices.__getitem__(indexes)), *indexes[1:])))
+  return Tensor(out.astype('float32')).transpose(ax1=axis, ax2=0) if axis != 0 else Tensor(out.astype('float32'))
