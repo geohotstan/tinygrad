@@ -234,14 +234,17 @@ def _gather(input, indices, axis=0): # follow torch.gather behavior
   print(f"answer: {torch.gather(input=torch.tensor(input.numpy()), index=torch.tensor(indices.numpy().astype('int')), dim=axis)}")
   assert input.ndim == indices.ndim, f"input tensor ndim: {input.ndim} must equal indices tensor ndim: {indices.ndim}"
   input = input.transpose(ax1=axis, ax2=input.ndim-1).realize()
-  slice_args = [(0,x) if i != input.ndim-1 else (0,input.shape[i]) for i, x in enumerate(indices.shape)]
-  input = input.slice(slice_args)
+  if axis != 0: indices = indices.transpose(ax1=0, ax2=axis).realize()
+  input_slice_args = [(0,x) if i != 0 else (0, indices.shape[-1]) for i,x in enumerate(input.shape)]
+  input = input.slice(input_slice_args)
   reshape_arg = [1]*indices.ndim + [input.shape[-1]]
   cond_1 = indices.unsqueeze(indices.ndim).expand(*indices.shape, input.shape[-1])
   cond_2 = Tensor.arange(input.shape[-1]).reshape(*reshape_arg).expand(*indices.shape, input.shape[-1])
   t = cond_1 == cond_2
   ret = t*input
+  if axis != 0: ret = ret.transpose(ax1=0, ax2=axis).realize()
   return ret.sum(ret.ndim-1)
+
 
 
 def Gather(input, indices, axis):
