@@ -34,6 +34,7 @@ def get_run_onnx(onnx_model: ModelProto):
       attr = type_proto.WhichOneof('value')
       if attr == 'tensor_type': return tuple(x.dim_value for x in getattr(type_proto, attr).shape.dim)
       elif attr == 'sequence_type': 
+        return []
         type_proto = getattr(type_proto, attr).elem_type
         attr = type_proto.WhichOneof('value')
         t_shape = [x.dim_value for x in getattr(type_proto, attr).shape.dim]
@@ -113,11 +114,12 @@ def get_run_onnx(onnx_model: ModelProto):
           input_tensors[inp.name] = inputs[inp.name]
         elif isinstance(inputs[inp.name], list):
           print('fuck')
+          print(inputs[inp.name])
           input_tensors[inp.name] = Tensor(inputs[inp.name], requires_grad=False)
         else:
           input_tensors[inp.name] = Tensor(inputs[inp.name], requires_grad=False)
         input_shape = input_tensors[inp.name].shape
-        assert input_shape == shape, f"wrong shape for input {inp.name}, {input_shape} isn't {shape}"
+        assert input_shape == shape or shape == [], f"wrong shape for input {inp.name}, {input_shape} isn't {shape}"
         for _,v in input_tensors.items(): v.realize()
       else:
         raise Exception(f"no data for {inp.name} with shape {shape}")

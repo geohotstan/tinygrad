@@ -24,7 +24,7 @@ def Gemm(A, B, C=None, alpha=1.0, beta=1.0, transA=0, transB=0, broadcast=0):
   if C is not None: ret += beta * (C if broadcast == 0 else C.reshape([-1 if i <  len(C.shape) else 1 for i in range(len(ret.shape))][::-1]))
   return ret
 
-def _batchnorm(self:Tensor, weight:Optional[Tensor], bias:Optional[Tensor], mean:Tensor, invstd:Tensor): # works with 3D Tensors and 5D Tensors
+def _batchnorm(self:Tensor, weight:Optional[Tensor], bias:Optional[Tensor], mean:Tensor, invstd:Tensor): # copied from Tensor.batchnorm(), works with 3D Tensors and 5D Tensors
   shape = [1, -1] + [1] * (self.ndim-2)
   x = (self - mean.reshape(shape=shape))
   if weight: x = x * weight.reshape(shape=shape)
@@ -171,6 +171,7 @@ def MaxUnpool(xT, xI, outshape=None, kernel_shape=None, pads=None, strides=None)
   ok = (haha == lol).sum(0)
   # wtf to do after this......
   # maybe convtranspose??
+  # THIS IS A SCATTER!!!!
   return None
 
 def Conv(X, W, B=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, strides=1):
@@ -424,10 +425,33 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
       x_out = (x_out + 0.5)/scales_lol[-1] - 0.5 if output_shape[-1] > 1 else Tensor([0])
       y_out = (y_out + 0.5)/scales_lol[-2] - 0.5 if output_shape[-2] > 1 else Tensor([0])
     elif coordinate_transformation_mode == "tf_crop_and_resize":
-      x_out = roi[-1][0] * (X.shape[-1] - 1) + x_out * ((roi[-1][1] - roi[-1][0]) * (X.shape[-1] - 1) / (output_shape[-1] - 1))  if output_shape[-1] > 1 else Tensor([0.5 * (roi[-1][0] + roi[-1][1]) * (X.shape[-1] - 1)])
-      y_out = roi[-2][0] * (X.shape[-2] - 1) + y_out * ((roi[-2][1] - roi[-2][0]) * (X.shape[-2] - 1) / (output_shape[-2] - 1))  if output_shape[-2] > 1 else Tensor([0.5 * (roi[-2][0] + roi[-2][1]) * (X.shape[-2] - 1)])
+      x_out = roi[-1][0] * (X.shape[-1] - 1) + x_out * ((roi[-1][1] - roi[-1][0]) * (X.shape[-1] - 1) / (output_shape[-1] - 1)) if output_shape[-1] > 1 else Tensor([0.5 * (roi[-1][0] + roi[-1][1]) * (X.shape[-1] - 1)])
+      y_out = roi[-2][0] * (X.shape[-2] - 1) + y_out * ((roi[-2][1] - roi[-2][0]) * (X.shape[-2] - 1) / (output_shape[-2] - 1)) if output_shape[-2] > 1 else Tensor([0.5 * (roi[-2][0] + roi[-2][1]) * (X.shape[-2] - 1)])
     return x_out.clip(0, X.shape[-1]-1), y_out.clip(0, X.shape[-2]-1)
-      
+  def _cubic_interpolation(p, x):
+    return p[1] + 0.5 * x*(p[2] - p[0] + x*(2.0*p[0] - 5.0*p[1] + 4.0*p[2] - p[3] + x*(3.0*(p[1] - p[2]) + p[3] - p[0])))
+  def _bicubic_interpolation(pixels, x, y):
+    ret = [_cubic_interpolation(pixels[0], y), _cubic_interpolation(pixels[1], y), _cubic_interpolation(pixels[2], y), _cubic_interpolation(pixels[3], y)]
+    return _cubic_interpolation(ret, x)
+    '''
+  def loool(p):
+    a00 = p[1][1]
+		a01 = -.5*p[1][0] + .5*p[1][2]
+		a02 = p[1][0] - 2.5*p[1][1] + 2*p[1][2] - .5*p[1][3]
+		a03 = -.5*p[1][0] + 1.5*p[1][1] - 1.5*p[1][2] + .5*p[1][3]
+		a10 = -.5*p[0][1] + .5*p[2][1]
+		a11 = .25*p[0][0] - .25*p[0][2] - .25*p[2][0] + .25*p[2][2]
+		a12 = -.5*p[0][0] + 1.25*p[0][1] - p[0][2] + .25*p[0][3] + .5*p[2][0] - 1.25*p[2][1] + p[2][2] - .25*p[2][3]
+		a13 = .25*p[0][0] - .75*p[0][1] + .75*p[0][2] - .25*p[0][3] - .25*p[2][0] + .75*p[2][1] - .75*p[2][2] + .25*p[2][3]
+		a20 = p[0][1] - 2.5*p[1][1] + 2*p[2][1] - .5*p[3][1]
+		a21 = -.5*p[0][0] + .5*p[0][2] + 1.25*p[1][0] - 1.25*p[1][2] - p[2][0] + p[2][2] + .25*p[3][0] - .25*p[3][2]
+		a22 = p[0][0] - 2.5*p[0][1] + 2*p[0][2] - .5*p[0][3] - 2.5*p[1][0] + 6.25*p[1][1] - 5*p[1][2] + 1.25*p[1][3] + 2*p[2][0] - 5*p[2][1] + 4*p[2][2] - p[2][3] - .5*p[3][0] + 1.25*p[3][1] - p[3][2] + .25*p[3][3]
+		a23 = -.5*p[0][0] + 1.5*p[0][1] - 1.5*p[0][2] + .5*p[0][3] + 1.25*p[1][0] - 3.75*p[1][1] + 3.75*p[1][2] - 1.25*p[1][3] - p[2][0] + 3*p[2][1] - 3*p[2][2] + p[2][3] + .25*p[3][0] - .75*p[3][1] + .75*p[3][2] - .25*p[3][3]
+		a30 = -.5*p[0][1] + 1.5*p[1][1] - 1.5*p[2][1] + .5*p[3][1]
+		a31 = .25*p[0][0] - .25*p[0][2] - .75*p[1][0] + .75*p[1][2] + .75*p[2][0] - .75*p[2][2] - .25*p[3][0] + .25*p[3][2]
+		a32 = -.5*p[0][0] + 1.25*p[0][1] - p[0][2] + .25*p[0][3] + 1.5*p[1][0] - 3.75*p[1][1] + 3*p[1][2] - .75*p[1][3] - 1.5*p[2][0] + 3.75*p[2][1] - 3*p[2][2] + .75*p[2][3] + .5*p[3][0] - 1.25*p[3][1] + p[3][2] - .25*p[3][3]
+		a33 = .25*p[0][0] - .75*p[0][1] + .75*p[0][2] - .25*p[0][3] - .75*p[1][0] + 2.25*p[1][1] - 2.25*p[1][2] + .75*p[1][3] + .75*p[2][0] - 2.25*p[2][1] + 2.25*p[2][2] - .75*p[2][3] - .25*p[3][0] + .75*p[3][1] - .75*p[3][2] + .25*p[3][3]
+      '''
   assert scales or sizes and not (scales and sizes), "only scales or sizes, sir"
   if roi:
     roi = safe_numpy(roi)
@@ -481,6 +505,9 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
     return _nearest_gather(X, indices_out, output_shape)
   elif mode == "linear":
     x_out, y_out = _coordinate_transformation(x_out, y_out, output_shape_, scales, roi)
+    print(x_out.numpy())
+    print(y_out.numpy())
+    # max(1, 1 / scale)
     ret = []
     for y in safe_numpy(y_out):
       for x in safe_numpy(x_out):
@@ -501,9 +528,13 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
     return Tensor(ret).reshape(output_shape)
   elif mode == "cubic":
     print("cubic")
-    print(x_out.numpy())
-    print(y_out.numpy())
-    return 
+    pixels = safe_numpy(X.reshape(4,4)).tolist()
+    x_out, y_out = _coordinate_transformation(x_out, y_out, output_shape_, scales, roi)
+    ret = []
+    for y in safe_numpy(y_out):
+      for x in safe_numpy(x_out):
+        ret.append(_bicubic_interpolation(pixels, x, y))
+    return Tensor(ret).reshape(output_shape)
 
   def _cubic_coeffs(ratio, scale=None, A=-0.75):
     return Tensor([((A * (ratio + 1) - 5 * A) * (ratio + 1) + 8 * A) * (ratio + 1) - 4 * A, ((A + 2) * ratio - (A + 3)) * ratio * ratio + 1, ((A + 2) * (1 - ratio) - (A + 3)) * (1 - ratio) * (1 - ratio) + 1, ((A * ((1 - ratio) + 1) - 5 * A) * ((1 - ratio) + 1) + 8 * A) * ((1 - ratio) + 1) - 4 * A,])
