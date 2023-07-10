@@ -153,12 +153,12 @@ def MaxPool(X, kernel_shape, auto_pad="NOTSET", ceil_mode=0, dilations=1, pads=N
   if ceil_mode: auto_pad = "SAME_UPPER"
   ret = _padding(X, pads, auto_pad, constant_value=-np.inf, axes=tuple(range(len(X.shape)))[-len(kernel_shape):], strides=strides, kernel_shape=kernel_shape, dilations=dilations)
   ret = ret.max_pool2d(kernel_shape, stride=strides, dilation=dilations)
-  # X_len = prod(X.shape)
-  # ret_len = prod(ret.shape)
-  # lol = (ret.flatten().unsqueeze(1).expand(ret_len, X_len) == X.flatten().reshape(1, X_len).expand(ret_len, X_len)).sum(0)
-  # can't run this....... need other way
-  indices = None
-  return ret, indices # (ret, indices)
+  ret_shape = ret.shape
+  ret_len = prod(ret.shape)
+  X_len = prod(X.shape)
+  indices = ((ret.flatten().unsqueeze(1).expand(ret_len, X_len) == X.flatten().reshape(1, X_len).expand(ret_len, X_len)) * Tensor.arange(X_len).reshape(1, X_len).expand(ret_len, X_len)).sum(1).reshape(ret_shape).cast(dtypes.int64)
+  if storage_order: indices = indices.transpose(indices.ndim-2, indices.ndim-1)
+  return ret, indices
 
 def MaxUnpool(xT, xI, outshape=None, kernel_shape=None, pads=None, strides=None):
   xI = xI.flatten()
@@ -170,8 +170,7 @@ def MaxUnpool(xT, xI, outshape=None, kernel_shape=None, pads=None, strides=None)
   lol = arange.reshape(1, outlength).expand(haha.shape)
   ok = (haha == lol).sum(0)
   # wtf to do after this......
-  # maybe convtranspose??
-  # THIS IS A SCATTER!!!!
+  # This shit is basically a scatter. Have to implement scatter.
   return None
 
 def Conv(X, W, B=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, strides=1):
@@ -359,27 +358,35 @@ def _gather(input: Tensor, indices: Tensor): # COMPARE, EXPAND, MULTIPLY, SUM
   return ((indices.unsqueeze(indices.ndim).expand(*indices.shape, input.shape[-1]) == Tensor.arange(input.shape[-1]).reshape(*reshape_arg).expand(*indices.shape, input.shape[-1]))*input).sum(indices.ndim)
 
 def Gather(input, indices, axis=0):
-  indices = (indices < 0).where(indices+input.shape[axis], indices)
-  indices_shape = list(indices.shape)
-  indices = indices.flatten()
-  input = input.transpose(ax1=0, ax2=axis)
-  if input.ndim > 1:
-    rem_shape = list(input.shape)[1:]
-    input = input.reshape(input.shape[0], -1).T
-    repeat_arg = [1]*(input.ndim-1) + [input.shape[-2]]
-    indices = indices.unsqueeze(indices.ndim).repeat(repeat_arg)
-    ret = _gather(input, indices)
-    if rem_shape: ret = ret.reshape(*[indices.shape[0]] + rem_shape)
-  else:
-    ret = _gather(input, indices)
-  reshape_arg = []
-  ret = ret.transpose(ax1=axis, ax2=0)
-  for idx, shape in enumerate(ret.shape):
-    if idx == axis:
-      reshape_arg.extend(indices_shape)
+  input_sh = list(input.shape)
+  ret_shape = input_sh[:axis] + list(indices.shape) + input_sh[axis+1:]
+  if indices.ndim < 6: # shrinking and cating hits a weird recursion limit with VERY LARGE indices (only 1 test)
+    if indices.ndim > 1: indices = indices.flatten()
+    indices = [input_sh[axis]+int(x) if x<0 else int(x) for x in safe_numpy(indices)]
+    args = [[(0,x) if j != axis else (i,i+1) for j, x in enumerate(input_sh)] for i in indices]
+    return input.shrink(arg=tuple(args[0])).cat(*[input.shrink(arg=tuple(arg)) for arg in args[1:]], dim=axis).reshape(ret_shape)
+  else: # previous implementation that uses too many kernels TODO improve this
+    indices = (indices < 0).where(indices+input.shape[axis], indices)
+    indices_shape = list(indices.shape)
+    indices = indices.flatten()
+    input = input.transpose(ax1=0, ax2=axis)
+    if input.ndim > 1:
+      rem_shape = list(input.shape)[1:]
+      input = input.reshape(input.shape[0], -1).T
+      repeat_arg = [1]*(input.ndim-1) + [input.shape[-2]]
+      indices = indices.unsqueeze(indices.ndim).repeat(repeat_arg)
+      ret = _gather(input, indices)
+      if rem_shape: ret = ret.reshape(*[indices.shape[0]] + rem_shape)
     else:
-      reshape_arg.append(shape)
-  return ret.reshape(*reshape_arg)
+      ret = _gather(input, indices)
+    reshape_arg = []
+    ret = ret.transpose(ax1=axis, ax2=0)
+    for idx, shape in enumerate(ret.shape):
+      if idx == axis:
+        reshape_arg.extend(indices_shape)
+      else:
+        reshape_arg.append(shape)
+    return ret.reshape(*reshape_arg)
 
 def GatherElements(input, indices, axis):
   indices = (indices < 0).where(indices+input.shape[axis], indices)
@@ -394,17 +401,33 @@ def ArrayFeatureExtractor(input, indices):
   ret = Gather(input, indices, input.ndim-1)
   return ret
 
-def _round(x:Tensor, n:float, case_eq_round_down = True) -> Tensor:
-  assert n <= 1, f"n:{n} is larger than 1"
-  b = x.cast(dtypes.int32).contiguous().cast(x.dtype) + n
-  return (x > b).where(b+1-n, b-n) if case_eq_round_down else (x >= b).where(b+1-n, b-n)
+def _round(x:Tensor, n:float, equidistant_case = "round_down") -> Tensor:
+  def _and(cond1, cond2):
+    and_cond = cond1 + cond2
+    return (and_cond == 2).where(1, 0)
+  assert n <= 1, f"n:{n} shouldn't be larger than 1"
+  b = x.cast(dtypes.int32).contiguous().cast(x.dtype)
+  b = (b >= 0).where(b+n, b-n)
+  if equidistant_case == "round_down":
+    return (x > b).where(b+1-n, b-n) 
+  elif equidistant_case == "round_up":
+    return (x >= b).where(b+1-n, b-n)
+  elif equidistant_case == "round_to_even":
+    x_ceil_fraction = x.ceil()/2
+    cond_ceil_even = x_ceil_fraction.ceil() == x_ceil_fraction
+    x = (_and(x == b, cond_ceil_even)).where(x+1-n, x)
+    x = (x > b).where(b+1-n, b-n)
+    return x
+
+def Round(X:Tensor):
+  return _round(X, 0.5, "round_to_even")
 
 def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, coordinate_transformation_mode='half_pixel', cubic_coeff_a=-0.75, exclude_outside=0, extrapolation_value=0.0, keep_aspect_ratio_policy='stretch', mode='nearest', nearest_mode='round_prefer_floor'):
   def _nearest_gather(X: Tensor, indices: Tensor, output_shape): # MAYBE USE SOMETHING ELSE OTHER THAN GATHER like reshape -> expand -> reshape -> [shrink]? bad gather many kernel bad, OR TRY NOT FLATTEN()?
     return _gather(X.flatten(), indices).reshape(output_shape)
   def _nearest_mode(x_resized: Tensor, nearest_mode: str, x_len):
-    if nearest_mode == "round_prefer_floor": ret = _round(x_resized, 0.5, True)
-    elif nearest_mode == "round_prefer_ceil": ret = _round(x_resized, 0.5, False)
+    if nearest_mode == "round_prefer_floor": ret = _round(x_resized, 0.5, "round_down")
+    elif nearest_mode == "round_prefer_ceil": ret = _round(x_resized, 0.5, "round_up")
     elif nearest_mode == "floor": ret = x_resized.floor()
     elif nearest_mode == "ceil": ret = x_resized.ceil()
     return ret.clip(0, x_len-1)
@@ -480,11 +503,11 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
     else: scales = [si/xs for xs, si in zip(X.shape, sizes)]
     if keep_aspect_ratio_policy == "not_larger":
       scale = min(scales)
-      sizes = _round(Tensor(list(X.shape[-2:]))*scale, 0.5, False)
+      sizes = _round(Tensor(list(X.shape[-2:]))*scale, 0.5, "round_up")
       sizes = list(X.shape[:-2]) + [int(i) for i in safe_numpy(sizes)]
     elif keep_aspect_ratio_policy == "not_smaller":
       scale = max(scales)
-      sizes = _round(Tensor(list(X.shape[-2:]))*scale, 0.5, False)
+      sizes = _round(Tensor(list(X.shape[-2:]))*scale, 0.5, "round_up")
       sizes = list(X.shape[:-2]) + [int(i) for i in safe_numpy(sizes)]
 
   output_shape = sizes if sizes else [math.floor(x*s) for x,s in zip(X.shape, scales)] 
