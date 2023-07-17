@@ -520,29 +520,7 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
   def _bicubic_interpolation(pixels, x, y):
     ret = [_cubic_interpolation(pixels[0], y), _cubic_interpolation(pixels[1], y), _cubic_interpolation(pixels[2], y), _cubic_interpolation(pixels[3], y)]
     return _cubic_interpolation(ret, x)
-<<<<<<< HEAD
-    '''
-  def loool(p):
-    a00 = p[1][1]
-		a01 = -.5*p[1][0] + .5*p[1][2]
-		a02 = p[1][0] - 2.5*p[1][1] + 2*p[1][2] - .5*p[1][3]
-		a03 = -.5*p[1][0] + 1.5*p[1][1] - 1.5*p[1][2] + .5*p[1][3]
-		a10 = -.5*p[0][1] + .5*p[2][1]
-		a11 = .25*p[0][0] - .25*p[0][2] - .25*p[2][0] + .25*p[2][2]
-		a12 = -.5*p[0][0] + 1.25*p[0][1] - p[0][2] + .25*p[0][3] + .5*p[2][0] - 1.25*p[2][1] + p[2][2] - .25*p[2][3]
-		a13 = .25*p[0][0] - .75*p[0][1] + .75*p[0][2] - .25*p[0][3] - .25*p[2][0] + .75*p[2][1] - .75*p[2][2] + .25*p[2][3]
-		a20 = p[0][1] - 2.5*p[1][1] + 2*p[2][1] - .5*p[3][1]
-		a21 = -.5*p[0][0] + .5*p[0][2] + 1.25*p[1][0] - 1.25*p[1][2] - p[2][0] + p[2][2] + .25*p[3][0] - .25*p[3][2]
-		a22 = p[0][0] - 2.5*p[0][1] + 2*p[0][2] - .5*p[0][3] - 2.5*p[1][0] + 6.25*p[1][1] - 5*p[1][2] + 1.25*p[1][3] + 2*p[2][0] - 5*p[2][1] + 4*p[2][2] - p[2][3] - .5*p[3][0] + 1.25*p[3][1] - p[3][2] + .25*p[3][3]
-		a23 = -.5*p[0][0] + 1.5*p[0][1] - 1.5*p[0][2] + .5*p[0][3] + 1.25*p[1][0] - 3.75*p[1][1] + 3.75*p[1][2] - 1.25*p[1][3] - p[2][0] + 3*p[2][1] - 3*p[2][2] + p[2][3] + .25*p[3][0] - .75*p[3][1] + .75*p[3][2] - .25*p[3][3]
-		a30 = -.5*p[0][1] + 1.5*p[1][1] - 1.5*p[2][1] + .5*p[3][1]
-		a31 = .25*p[0][0] - .25*p[0][2] - .75*p[1][0] + .75*p[1][2] + .75*p[2][0] - .75*p[2][2] - .25*p[3][0] + .25*p[3][2]
-		a32 = -.5*p[0][0] + 1.25*p[0][1] - p[0][2] + .25*p[0][3] + 1.5*p[1][0] - 3.75*p[1][1] + 3*p[1][2] - .75*p[1][3] - 1.5*p[2][0] + 3.75*p[2][1] - 3*p[2][2] + .75*p[2][3] + .5*p[3][0] - 1.25*p[3][1] + p[3][2] - .25*p[3][3]
-		a33 = .25*p[0][0] - .75*p[0][1] + .75*p[0][2] - .25*p[0][3] - .75*p[1][0] + 2.25*p[1][1] - 2.25*p[1][2] + .75*p[1][3] + .75*p[2][0] - 2.25*p[2][1] + 2.25*p[2][2] - .75*p[2][3] - .25*p[3][0] + .75*p[3][1] - .75*p[3][2] + .25*p[3][3]
-      '''
-=======
       
->>>>>>> passing_onnx
   assert scales or sizes and not (scales and sizes), "only scales or sizes, sir"
   if roi:
     roi = safe_numpy(roi)
@@ -627,27 +605,8 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
       for x in safe_numpy(x_out):
         ret.append(_bicubic_interpolation(pixels, x, y))
     return Tensor(ret).reshape(output_shape)
-<<<<<<< HEAD
-
-  def _cubic_coeffs(ratio, scale=None, A=-0.75):
-    return Tensor([((A * (ratio + 1) - 5 * A) * (ratio + 1) + 8 * A) * (ratio + 1) - 4 * A, ((A + 2) * ratio - (A + 3)) * ratio * ratio + 1, ((A + 2) * (1 - ratio) - (A + 3)) * (1 - ratio) * (1 - ratio) + 1, ((A * ((1 - ratio) + 1) - 5 * A) * ((1 - ratio) + 1) + 8 * A) * ((1 - ratio) + 1) - 4 * A,])
-
-def Gradient(a, b, xs, y):
-  # parse what the operations are from node
-  # add_node = onnx.helper.make_node("Add", ["a", "b"], ["c"], name="my_add")
-  # mul_node = onnx.helper.make_node("Mul", ["c", "a"], ["d"], name="my_mul")
-  print(a, "a")
-  print(b, "b")
-  print(xs, "xs")
-  print(y, "y")
-  da = None 
-  db = None
-  return da, db
-  
-=======
     # print(x_out.numpy())
     # print(y_out.numpy())
->>>>>>> passing_onnx
 
 def CenterCropPad(input, shape, axes=None):
   if not axes: axes = list(range(input.ndim))
