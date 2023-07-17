@@ -117,16 +117,6 @@ def get_run_onnx(onnx_model: ModelProto):
         if isinstance(inputs[inp.name], Tensor):
           input_tensors[inp.name] = inputs[inp.name]
         elif isinstance(inputs[inp.name], list):
-<<<<<<< HEAD
-          print('fuck')
-          print(inputs[inp.name])
-          input_tensors[inp.name] = Tensor(inputs[inp.name], requires_grad=False)
-        else:
-          input_tensors[inp.name] = Tensor(inputs[inp.name], requires_grad=False)
-        input_shape = input_tensors[inp.name].shape
-        assert input_shape == shape or shape == [], f"wrong shape for input {inp.name}, {input_shape} isn't {shape}"
-        for _,v in input_tensors.items(): v.realize()
-=======
           input_tensors[inp.name] = [Tensor(i, requires_grad=False) for i in inputs[inp.name]]
         elif requires_grad:
           input_tensors[inp.name] = Tensor(inputs[inp.name], requires_grad=True)
@@ -135,7 +125,6 @@ def get_run_onnx(onnx_model: ModelProto):
         input_shape = input_tensors[inp.name].shape if input_tensors[inp.name].__class__ is Tensor else []
         assert input_shape == shape or shape == [], f"wrong shape for input {inp.name}, {input_shape} isn't {shape}"
         for _,v in input_tensors.items(): v.realize() if v.__class__ is Tensor else ...
->>>>>>> passing_onnx
       else:
         raise Exception(f"no data for {inp.name} with shape {shape}")
 
