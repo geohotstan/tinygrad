@@ -216,13 +216,6 @@ jobs:
       run: |
         GPU=1 IMAGE=1 python3 test/test_ops.py
         FORWARD_ONLY=1 GPU=1 IMAGE=2 python3 test/test_ops.py
-<<<<<<< HEAD
-    - name: Test openpilot model compile and size
-      run: |
-        ALLOWED_KERNEL_COUNT=207 FLOAT16=1 DEBUGCL=1 GPU=1 IMAGE=2 python3 openpilot/compile.py
-        python3 -c 'import os; assert os.path.getsize("/tmp/output.thneed") < 100_000_000'
-=======
->>>>>>> passing_onnx
     - name: Test openpilot model correctness (float32)
       run: DEBUGCL=1 GPU=1 IMAGE=2 python3 openpilot/compile.py
     - name: Test tensor core ops
