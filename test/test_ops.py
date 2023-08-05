@@ -1138,7 +1138,7 @@ class TestOps(unittest.TestCase):
   def test_gather(self):
     # indices cannot have gradient
     c = np.random.randint(3, size=[3,4,5,1,4])
-    a = Tensor(c, dtype=dtypes.float32 requires_grad=False)
+    a = Tensor(c, dtype=dtypes.float32, requires_grad=False)
     b = torch.tensor(c, dtype=torch.int64, requires_grad=False)
     helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=0), lambda x: x.gather(idx=a, dim=0))
     helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=1), lambda x: x.gather(idx=a, dim=1))
