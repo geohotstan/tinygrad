@@ -61,13 +61,8 @@ class TestUOps(unittest.TestCase):
   def test_mul(self): self._test_bop_fxn(BinaryOps.MUL, lambda a,b: a*b)
   def test_div(self): self._test_bop_fxn(BinaryOps.DIV, lambda a,b: a/b)
   def test_max(self): self._test_bop_fxn(BinaryOps.MAX, lambda a,b: max(a,b))
-<<<<<<< HEAD
-  def test_cmplt(self): self._test_bop_fxn(BinaryOps.CMPLT, lambda a,b: float(a<b))
-  # MOD isn't tested
-=======
   def test_cmpeq(self): self._test_bop_fxn(BinaryOps.CMPEQ, lambda a,b: float(a==b))
   # CMPLT and MOD aren't tested
->>>>>>> parent of d24f936 (just cmplt (#1493))
 
   # doesn't work in LLVM
   #def test_add_int32(self): self._test_bop_fxn(BinaryOps.ADD, lambda a,b: a+b, dtypes.int32)
