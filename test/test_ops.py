@@ -1129,11 +1129,11 @@ class TestOps(unittest.TestCase):
 
   def test_slice_fancy_indexing(self):
     # indices cannot have gradient
-    a = torch.randint(low=-1, high=1, size=(2,1,1,1,1,1), requires_grad=False)
-    b = torch.randint(high=1, size=(1,3,1,1,1,1), requires_grad=False)
-    c = torch.randint(low=-5, high=5, size=(2,1,4,1,1,1), requires_grad=False)
-    d = torch.randint(high=4, size=(2,1,1,5,1,1), requires_grad=False)
-    e = torch.randint(high=1, size=(1,1,1,1,6,1), requires_grad=False)
+    a = torch.randint(low=-1, high=1, size=(2,1,1,1,1,1), dtype=torch.int64, requires_grad=False)
+    b = torch.randint(high=1, size=(1,3,1,1,1,1), dtype=torch.int64, requires_grad=False)
+    c = torch.randint(low=-5, high=5, size=(2,1,4,1,1,1), dtype=torch.int64, requires_grad=False)
+    d = torch.randint(high=4, size=(2,1,1,5,1,1), dtype=torch.int64, requires_grad=False)
+    e = torch.randint(high=1, size=(1,1,1,1,6,1), dtype=torch.int64, requires_grad=False)
     i = Tensor(a.detach().numpy(), requires_grad=False)
     j = Tensor(b.detach().numpy(), requires_grad=False)
     k = Tensor(c.detach().numpy(), requires_grad=False)
