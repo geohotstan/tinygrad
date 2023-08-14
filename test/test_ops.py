@@ -1144,8 +1144,8 @@ class TestOps(unittest.TestCase):
     # helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,:,None,d,e], lambda x: x[i,:,None,o,p])
     # helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,:,10:11,d,0:2], lambda x: x[1,:,10:11,o,0:2])
     # helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,4,c,d,2], lambda x: x[1,4,k,o,2])
-    helper_test_op([(2,3)], lambda x: x[torch.tensor([[0,0,0],[0,0,0]]), torch.tensor(1)], lambda x: x[Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int32), Tensor(1, dtype=dtypes.int32)])
-    helper_test_op([(2,3)], lambda x: x[torch.tensor([1]), torch.tensor([[0,0,0],[0,0,0]])], lambda x: x[Tensor([1], dtype=dtypes.int32), Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int32)])
+    helper_test_op([(2,3)], lambda x: x[torch.tensor([[0,0,0],[0,0,0]]), torch.tensor(1)], lambda x: x[Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int64), Tensor(1, dtype=dtypes.int64)])
+    helper_test_op([(2,3)], lambda x: x[torch.tensor([1]), torch.tensor([[0,0,0],[0,0,0]])], lambda x: x[Tensor([1], dtype=dtypes.int64), Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int64)])
 
   def test_gather(self):
     # indices cannot have gradient
