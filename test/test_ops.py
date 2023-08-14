@@ -58,7 +58,7 @@ def helper_test_op(shps, torch_fxn, tinygrad_fxn=None, atol=1e-6, rtol=1e-3, gra
 def prepare_test_op(a, b, shps, vals):
   torch.manual_seed(0)
   np.random.seed(0)
-  if shps is None: ts = [torch.tensor(x, requires_grad=False) for x in vals] if all(isinstance(v, int) for v in vals) else [torch.tensor(x, requires_grad=True) for x in vals]
+  if shps is None: ts = [torch.tensor(x, requires_grad=False) if isinstance(x, int) else torch.tensor(x, requires_grad=True) for x in vals]
   else: ts = [torch.tensor((np.random.random(size=x) + a) * b, requires_grad=True, dtype=torch.float32) for x in shps]
   tst = [Tensor(x.detach().numpy(), requires_grad=not FORWARD_ONLY) for x in ts]
   return ts, tst
@@ -1134,16 +1134,17 @@ class TestOps(unittest.TestCase):
     c = torch.randint(low=-5, high=5, size=(10,1,14,1,1,1), requires_grad=False)
     d = torch.randint(high=4, size=(10,1,1,14,1,1), requires_grad=False)
     e = torch.randint(high=1, size=(10,1,1,1,13,1), requires_grad=False)
-    i, j, k, o, p = [Tensor(tor.detach().numpy(), requires_grad=False).float() for tor in [a,b,c,d,e]]
+    i, j, k, o, p = [Tensor(tor.detach().numpy(), dtype=dtypes.int32, requires_grad=False) for tor in [a,b,c,d,e]]
+    helper_test_op(None, torch.add, Tensor.add, vals=[(5), (1e-10)], forward_only=True)
     helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,b,c,d,e], lambda x: x[i,j,k,o,p])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[:,b,c,d,e], lambda x: x[:,j,k,o,p])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[:,b,c,d,:], lambda x: x[:,j,k,o,:])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,b,...], lambda x: x[i,j,...])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,...,e], lambda x: x[i,...,p])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[...,c,:,e], lambda x: x[...,k,:,p])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,:,None,d,e], lambda x: x[i,:,None,o,p])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,:,10:11,d,0:2], lambda x: x[1,:,10:11,o,0:2])
-    # helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,4,c,d,2], lambda x: x[1,4,k,o,2])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[:,b,c,d,e], lambda x: x[:,j,k,o,p])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[:,b,c,d,:], lambda x: x[:,j,k,o,:])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,b,...], lambda x: x[i,j,...])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,...,e], lambda x: x[i,...,p])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[...,c,:,e], lambda x: x[...,k,:,p])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,:,None,d,e], lambda x: x[i,:,None,o,p])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,:,10:11,d,0:2], lambda x: x[1,:,10:11,o,0:2])
+    helper_test_op([(2,5,15,5,3,4)], lambda x: x[1,4,c,d,2], lambda x: x[1,4,k,o,2])
     helper_test_op([(2,3)], lambda x: x[torch.tensor([[0,0,0],[0,0,0]]), torch.tensor(1)], lambda x: x[Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int64), Tensor(1, dtype=dtypes.int64)])
     helper_test_op([(2,3)], lambda x: x[torch.tensor([1]), torch.tensor([[0,0,0],[0,0,0]])], lambda x: x[Tensor([1], dtype=dtypes.int64), Tensor([[0,0,0],[0,0,0]], dtype=dtypes.int64)])
 
