@@ -564,7 +564,7 @@ class Tensor:
   def square(self): return self*self
   def clip(self, min_, max_): return self.maximum(min_).minimum(max_)
   def abs(self): return self.relu() + (-self).relu()
-  def sign(self): return self / (self.abs() + 1e-10)
+  def sign(self): return self / (self.abs() + 1e-5)
   def reciprocal(self): return 1.0/self
 
   # ***** activation functions (unary) *****
