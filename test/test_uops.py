@@ -6,7 +6,7 @@ from tinygrad.ops import UnaryOps, BinaryOps, TernaryOps, ASTRunner, Compiled
 from tinygrad.codegen.linearizer import UOps, Token, ConstOp, MemOp
 from tinygrad.shape.symbolic import Variable
 def _uops_to_prg(uops):
-  ret = Device[Device.DEFAULT].renderer("test", uops) if not isinstance(Device[Device.DEFAULT], Compiled) else Device[Device.DEFAULT].from_underlying(uops)
+  ret = Device[Device.DEFAULT].renderer("test", uops) if isinstance(Device[Device.DEFAULT], Compiled) else Device[Device.DEFAULT].from_underlying(uops)
   src, global_size, local_size, binary = ret if len(ret) == 4 else ret + (False,)
   return ASTRunner("test", src, global_size, local_size, runtime_args={"binary": binary}).build(Device[Device.DEFAULT].runtime)
 
