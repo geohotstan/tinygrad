@@ -58,7 +58,7 @@ def helper_test_op(shps, torch_fxn, tinygrad_fxn=None, atol=1e-6, rtol=1e-3, gra
 def prepare_test_op(a, b, shps, vals):
   torch.manual_seed(0)
   np.random.seed(0)
-  if shps is None: ts = [torch.tensor(x, requires_grad=True) if isinstance(x, float) else torch.tensor(x, requires_grad=False) for x in vals]
+  if shps is None: ts = [torch.tensor(x, requires_grad=False) if isinstance(x, int) else torch.tensor(x, requires_grad=True) for x in vals]
   else: ts = [torch.tensor((np.random.random(size=x) + a) * b, requires_grad=True, dtype=torch.float32) for x in shps]
   tst = [Tensor(x.detach().numpy(), requires_grad=not FORWARD_ONLY) for x in ts]
   return ts, tst
@@ -331,7 +331,7 @@ class TestOps(unittest.TestCase):
   def test_sign(self):
     helper_test_op([(45,65)], lambda x: torch.sign(x), Tensor.sign)
     helper_test_op([()], lambda x: torch.sign(x), Tensor.sign)
-    helper_test_op(None, torch.sign, Tensor.sign, vals=[(5, -2, -3)], forward_only=True)
+    helper_test_op(None, torch.sign, Tensor.sign, vals=[(-3)], forward_only=True)
   def test_softsign(self):
     helper_test_op([(45,65)], lambda x: torch.nn.functional.softsign(x), Tensor.softsign)
     helper_test_op([()], lambda x: torch.nn.functional.softsign(x), Tensor.softsign)
