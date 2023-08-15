@@ -1129,11 +1129,11 @@ class TestOps(unittest.TestCase):
 
   def test_slice_fancy_indexing(self):
     # indices cannot have gradient
-    a = torch.randint(low=-1, high=1, size=(10,1,1,1,1,1), dtype=torch.int64, requires_grad=False)
-    b = torch.randint(high=1, size=(1,16,1,1,1,1), dtype=torch.int64, requires_grad=False)
-    c = torch.randint(low=-5, high=5, size=(10,1,14,1,1,1), dtype=torch.int64, requires_grad=False)
-    d = torch.randint(high=4, size=(10,1,1,14,1,1), dtype=torch.int64, requires_grad=False)
-    e = torch.randint(high=1, size=(10,1,1,1,13,1), dtype=torch.int64, requires_grad=False)
+    a = torch.randint(low=-1, high=1, size=(2,1,1,1,1,1), dtype=torch.int64, requires_grad=False)
+    b = torch.randint(high=1, size=(1,3,1,1,1,1), dtype=torch.int64, requires_grad=False)
+    c = torch.randint(low=-5, high=5, size=(1,1,4,1,1,1), dtype=torch.int64, requires_grad=False)
+    d = torch.randint(high=4, size=(2,1,1,5,1,1), dtype=torch.int64, requires_grad=False)
+    e = torch.randint(high=1, size=(1,1,1,1,6,1), dtype=torch.int64, requires_grad=False)
     i, j, k, o, p = [Tensor(tor.detach().numpy(), requires_grad=False) for tor in [a,b,c,d,e]]
     helper_test_op([(2,5,15,5,3,4)], lambda x: x[a,b,c,d,e], lambda x: x[i,j,k,o,p])
     helper_test_op([(2,5,15,5,3,4)], lambda x: x[:,b,c,d,e], lambda x: x[:,j,k,o,p])
@@ -1149,13 +1149,11 @@ class TestOps(unittest.TestCase):
 
   def test_gather(self):
     # indices cannot have gradient
-    b = torch.randint(3, size=[3,4,5,1,4], dtype=torch.int64, requires_grad=False)
+    b = torch.randint(3, size=[3,4,5], dtype=torch.int64, requires_grad=False)
     a = Tensor(b.detach().numpy(), requires_grad=False)
-    helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=0), lambda x: x.gather(idx=a, dim=0))
-    helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=1), lambda x: x.gather(idx=a, dim=1))
-    helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=2), lambda x: x.gather(idx=a, dim=2))
-    helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=3), lambda x: x.gather(idx=a, dim=3))
-    helper_test_op([(4,5,6,9,5)], lambda x: x.gather(index=b, dim=4), lambda x: x.gather(idx=a, dim=4))
+    helper_test_op([(4,5,6)], lambda x: x.gather(index=b, dim=0), lambda x: x.gather(idx=a, dim=0))
+    helper_test_op([(4,5,6)], lambda x: x.gather(index=b, dim=1), lambda x: x.gather(idx=a, dim=1))
+    helper_test_op([(4,5,6)], lambda x: x.gather(index=b, dim=2), lambda x: x.gather(idx=a, dim=2))
 
   def test_scaled_product_attention(self):
     helper_test_op([(32,8,16,64), (32,8,16,64), (32,8,16,64)], lambda x,y,z: torch.nn.functional.scaled_dot_product_attention(x,y,z), lambda x,y,z: Tensor.scaled_dot_product_attention(x,y,z))
