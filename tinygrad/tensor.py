@@ -207,7 +207,7 @@ class Tensor:
   def deepwalk(self):
     def _deepwalk(node, visited, nodes):
       visited.add(node)
-      if getattr(node, "_ctx", None):
+      if node._ctx:
         for i in node._ctx.parents:
           if i not in visited: _deepwalk(i, visited, nodes)
         nodes.append(node)
@@ -332,7 +332,7 @@ class Tensor:
     if tensor_found: # Fancy/tensor indexing
       for i,s in enumerate(sub): tensor_found[i] = (tensor_found[i][0]+s, tensor_found[i][1])
       dim = [i[0] for i in tensor_found]
-      idx = [i[1].sign().contiguous().__neg__().contiguous().relu().mul(ret.shape[i[0]]).add(i[1]) for i in tensor_found]
+      idx = [i[1].sign().contiguous().__neg__().contiguous().relu() * ret.shape[i[0]] + i[1] for i in tensor_found]
       max_dim = max(idx, key=lambda i: i.ndim).ndim
       idx = [i if i.ndim == max_dim else i.reshape(*[1]*(max_dim-i.ndim), *i.shape) for i in idx]
       sum_dim = [d if n==0 else d+i.ndim-n for n,(d,i) in enumerate(zip(dim,idx))]
@@ -345,11 +345,11 @@ class Tensor:
 
   def _gather(self, idx, dim):
     new_idx = idx[0].reshape(*[1]*dim[0], 1, *idx[0].shape, *[1]*(self.ndim-dim[0]-1))
-    arange = Tensor.arange(self.shape[dim[0]], dtype=dtypes.int64, requires_grad=False).reshape(*[1]*dim[0], self.shape[dim[0]], *[1]*idx[0].ndim, *[1]*(self.ndim-dim[0]-1))
+    arange = Tensor.arange(self.shape[dim[0]], dtype=dtypes.int32, requires_grad=False).reshape(*[1]*dim[0], self.shape[dim[0]], *[1]*idx[0].ndim, *[1]*(self.ndim-dim[0]-1))
     new_ret = (self.reshape(*self.shape[:dim[0]+1], *[1]*idx[0].ndim, *self.shape[dim[0]+1:]) * (arange == new_idx)).sum(dim[0])
     for i,d in zip(idx[1:],dim[1:]):
       new_idx = i.reshape(*[1]*dim[0], *i.shape, *[1]*(new_ret.ndim-dim[0]-i.ndim))
-      arange = Tensor.arange(new_ret.shape[d], dtype=dtypes.int64, requires_grad=False).reshape(*[1]*(d), new_ret.shape[d], *[1]*(new_ret.ndim-d-1))
+      arange = Tensor.arange(new_ret.shape[d], dtype=dtypes.int32, requires_grad=False).reshape(*[1]*(d), new_ret.shape[d], *[1]*(new_ret.ndim-d-1))
       new_ret = ((new_idx == arange) * new_ret).sum(d)
     return new_ret
 
@@ -358,7 +358,7 @@ class Tensor:
     if dim < 0: dim += self.ndim
     self_dim = list(range(self.ndim))
     sum_dim = [dim] + [i-n if n < dim else idx.ndim+i-n-1 for n,i in enumerate(self_dim[:dim] + self_dim[dim+1:])]
-    idx_arange = [idx] + [Tensor.arange(idx.shape[i], dtype=dtypes.int64, requires_grad=False) for i in self_dim[:dim]] + [Tensor.arange(idx.shape[i], dtype=dtypes.int64, requires_grad=False).reshape(*[1]*(n+1), idx.shape[i]) for n,i in enumerate(self_dim[dim+1:])]
+    idx_arange = [idx] + [Tensor.arange(idx.shape[i], dtype=dtypes.int32, requires_grad=False) for i in self_dim[:dim]] + [Tensor.arange(idx.shape[i], dtype=dtypes.int32, requires_grad=False).reshape(*[1]*(n+1), idx.shape[i]) for n,i in enumerate(self_dim[dim+1:])]
     return self._gather(idx_arange, sum_dim)
 
   def cat(self, *args, dim=0):
