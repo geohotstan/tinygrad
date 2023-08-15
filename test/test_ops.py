@@ -331,7 +331,7 @@ class TestOps(unittest.TestCase):
   def test_sign(self):
     helper_test_op([(45,65)], lambda x: torch.sign(x), Tensor.sign)
     helper_test_op([()], lambda x: torch.sign(x), Tensor.sign)
-    helper_test_op(None, torch.sign, Tensor.sign, vals=[3], forward_only=True)
+    helper_test_op(None, torch.sign, Tensor.sign, vals=[3,3,-4,-5], forward_only=True)
   def test_softsign(self):
     helper_test_op([(45,65)], lambda x: torch.nn.functional.softsign(x), Tensor.softsign)
     helper_test_op([()], lambda x: torch.nn.functional.softsign(x), Tensor.softsign)
