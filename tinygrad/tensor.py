@@ -345,11 +345,11 @@ class Tensor:
 
   def _gather(self, idx, dim):
     new_idx = idx[0].reshape(*[1]*dim[0], 1, *idx[0].shape, *[1]*(self.ndim-dim[0]-1))
-    arange = Tensor.arange(self.shape[dim[0]], dtype=dtypes.int32, requires_grad=False).reshape(*[1]*dim[0], self.shape[dim[0]], *[1]*idx[0].ndim, *[1]*(self.ndim-dim[0]-1))
+    arange = Tensor.arange(self.shape[dim[0]], dtype=dtypes.float32, requires_grad=False).reshape(*[1]*dim[0], self.shape[dim[0]], *[1]*idx[0].ndim, *[1]*(self.ndim-dim[0]-1))
     new_ret = (self.reshape(*self.shape[:dim[0]+1], *[1]*idx[0].ndim, *self.shape[dim[0]+1:]) * (arange == new_idx)).sum(dim[0])
     for i,d in zip(idx[1:],dim[1:]):
       new_idx = i.reshape(*[1]*dim[0], *i.shape, *[1]*(new_ret.ndim-dim[0]-i.ndim))
-      arange = Tensor.arange(new_ret.shape[d], dtype=dtypes.int32, requires_grad=False).reshape(*[1]*(d), new_ret.shape[d], *[1]*(new_ret.ndim-d-1))
+      arange = Tensor.arange(new_ret.shape[d], dtype=dtypes.float32, requires_grad=False).reshape(*[1]*(d), new_ret.shape[d], *[1]*(new_ret.ndim-d-1))
       new_ret = ((new_idx == arange) * new_ret).sum(d)
     return new_ret
 
