@@ -192,8 +192,7 @@ def MaxPool(X, kernel_shape, auto_pad="NOTSET", ceil_mode=0, dilations=1, pads=N
   if ceil_mode: auto_pad = "SAME_UPPER"
   ret = _padding(X, pads, auto_pad, constant_value=-np.inf, axes=tuple(range(len(X.shape)))[-len(kernel_shape):], strides=strides, kernel_shape=kernel_shape, dilations=dilations)
   ret = ret.max_pool2d(kernel_shape, stride=strides, dilation=dilations)
-  ret_len = ret.numel()
-  X_len = X.numel()
+  ret_len, X_len = ret.numel(), X.numel()
   indices = ((ret.flatten().unsqueeze(1).expand(ret_len, X_len) == X.flatten().reshape(1, X_len).expand(ret_len, X_len)) * Tensor.arange(X_len).reshape(1, X_len).expand(ret_len, X_len)).sum(1).reshape(ret.shape).cast(dtypes.int64)
   if storage_order: indices = indices.transpose(indices.ndim-2, indices.ndim-1)
   return ret, indices
@@ -243,17 +242,11 @@ def Shape(data, end=None, start=0): return Tensor(list(data.shape)[start:end], d
 def Size(data): return prod(data if isinstance(data, list) else data.shape)
 
 # TODO: this doesn't match Tensor.flatten behavior
-def Flatten(input, axis=1):
-  new_shape = (1, -1) if axis == 0 else (prod(input.shape[0:axis]), -1)
-  return input.reshape(new_shape)
+def Flatten(input, axis=1): return input.reshape(prod((1,) + input.shape[0:axis]), -1)
 
 # TODO: abstract out the broadcast logic in tensor
-def Expand(input, shape):
-  x_shape, y_shape = input.shape, [int(x) for x in safe_numpy(shape)]
-  # copied from _broadcasted
-  x_shape, y_shape = [([1]*(max(len(x_shape), len(y_shape))-len(t_shape)) + list(t_shape)) for t_shape in [x_shape, y_shape]]
-  shape_ret = tuple(max(sx, sy) for sx,sy in zip(x_shape, y_shape))
-  return input.reshape(x_shape).expand(shape_ret)
+# Tests pass but not 100% sure
+def Expand(input, shape): return input * Tensor.ones([int(x) for x in safe_numpy(shape)])
 
 def LRN(input, size, alpha=1e-4, beta=0.75, bias=1.0):
   bs, c, iy, ix = input.shape
@@ -326,12 +319,7 @@ def GlobalMaxPool(X): return X.max(axis=tuple(range(2, len(X.shape))), keepdim=T
 def OptionalHasElement(x: Tensor=None): return Tensor(x is not None and x.numel() > 0, dtype=dtypes.bool)
 def OptionalGetElement(x: Tensor=None): return x if x is not None else Tensor([], dtype=dtypes.float32)
 
-def Tile(input, repeats):
-  repeats_ = [int(x) for x in safe_numpy(repeats)]
-  new_shape = [x for i in range(len(input.shape)) for x in [1,input.shape[i]]]
-  expand_shape = [x for r,s in zip(repeats_, input.shape) for x in [r,s]]
-  final_shape = [r*s for r,s in zip(repeats_, input.shape)]
-  return input.reshape(new_shape).expand(expand_shape).reshape(final_shape)
+def Tile(input, repeats): return input.repeat([int(x) for x in safe_numpy(repeats)])
 
 def Range(start, limit, delta): return Tensor.arange(start=int(safe_numpy(start)), stop=int(safe_numpy(limit)), step=int(safe_numpy(delta))).cast(dtype=start.dtype)
 def Where(condition:Tensor,X:Tensor,Y:Tensor): return condition.where(X, Y).cast(X.dtype)
@@ -429,8 +417,7 @@ def _round(x:Tensor, n:float, equidistant_case = "round_down") -> Tensor:
     x = (x > b).where(b+1-n, b-n)
     return x
 
-def Round(X:Tensor):
-  return _round(X, 0.5, "round_to_even")
+def Round(X:Tensor): return _round(X, 0.5, "round_to_even")
 
 def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, coordinate_transformation_mode='half_pixel', cubic_coeff_a=-0.75, exclude_outside=0, extrapolation_value=0.0, keep_aspect_ratio_policy='stretch', mode='nearest', nearest_mode='round_prefer_floor'):
   def _nearest_gather(X: Tensor, x_out, y_out): return X[:,:,y_out,:][:,:,:,x_out]
@@ -687,5 +674,4 @@ def ArgMax(x, axis=0, keepdims=1, select_last_index=0):
   c = Tensor.arange(x.shape[axis]).reshape(*[1]*(axis), x.shape[axis], *[1]*(x.ndim - axis-1)) * m
   return c.max(axis=axis,keepdim=keepdims).cast(dtypes.int64)
 
-def ArgMin(x, axis=0, keepdims=1, select_last_index=0):
-  return ArgMax(-x, axis=axis, keepdims=keepdims, select_last_index=select_last_index)
+def ArgMin(x, axis=0, keepdims=1, select_last_index=0): return ArgMax(-x, axis=axis, keepdims=keepdims, select_last_index=select_last_index)
