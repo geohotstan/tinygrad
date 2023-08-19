@@ -65,13 +65,12 @@ def Adam(R, T, *inputs, alpha=0.9, beta=0.999, epsilon=0.0, norm_coefficient=0.0
 
 def Unsqueeze(data, axes):
   axes = [len(data.shape) + int(x) if x < 0 else int(x) for x in safe_numpy(axes)]
+  new_shape = [1] * (len(data.shape) + len(axes))
   ptr = 0
-  new_shape = []
-  for i in range(len(data.shape) + len(axes)):
-    if i in axes: new_shape.append(1)
-    else:
-      new_shape.append(data.shape[ptr])
-      ptr += 1
+  for i in range(len(new_shape)):
+    if i not in axes:
+      new_shape[i] = data.shape[ptr]
+      ptr+=1
   return data.reshape(new_shape)
 
 def Gemm(A, B, C=None, alpha=1.0, beta=1.0, transA=0, transB=0, broadcast=0):
