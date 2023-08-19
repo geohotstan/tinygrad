@@ -135,9 +135,7 @@ def _padding(X, pads=None, auto_pad="NOTSET", axes=None, constant_value=0., stri
   if auto_pad != "NOTSET": pads = _auto_pad(X, auto_pad, strides, kernel_shape, dilations)
   if pads is None: return X
   pads = _format_padding(pads, ndims=len(X.shape), axes=axes)
-  zero_padded = X.pad(tuple(pads))
-  constant_padder = Tensor.zeros_like(X).pad(tuple(pads), value=constant_value)
-  return zero_padded + constant_padder
+  return X.pad(tuple(pads), value=constant_value)
 
 def _auto_pad(X, auto_pad, strides, kernel_shape, dilations):
   strides = [strides]*len(kernel_shape) if isinstance(strides, int) else strides if strides else [1]*len(kernel_shape)
@@ -377,13 +375,13 @@ def SoftmaxCrossEntropyLoss(scores, labels, weights=None, ignore_index=None, red
   if ignore_index is not None: labels = (labels == ignore_index).where(C+1, labels)
   mask = labels.unsqueeze(1) == Tensor.arange(C).reshape(1, C, *[1]*len(s_dimensions))
   y = scores.log_softmax(axis=1)
-  if weights is not None: weights = weights.__getitem__(tuple([labels, *[slice(None,None,None)]*(weights.ndim-1)]))
+  if weights is not None: weights = weights.__getitem__(tuple([labels, *[slice(None)]*(weights.ndim-1)]))
   loss = (mask * -y).sum(1) if weights is None else (mask * -y).sum(1) * weights
   if reduction == "mean": loss = loss.sum() / (loss == 0).where(0, 1).sum() if weights is None else loss.sum() / weights.sum()
   elif reduction == "sum": loss = loss.sum()
   return loss, y
 
-def ArrayFeatureExtractor(input, indices): return input.__getitem__(tuple([slice(None,None,None) if i != (input.ndim-1) else indices for i in range(input.ndim)]))
+def ArrayFeatureExtractor(input, indices): return input.__getitem__(tuple([slice(None) if i != (input.ndim-1) else indices for i in range(input.ndim)]))
 def Gather(input, indices, axis=0):
   if indices.numel() < 9: # TODO not sure the exact number, need to run performance tests
     # NOTE faster gather and lessor kernels for smaller indices SOMETHING SOMETHING O(?) IDK I DIDN'T GO TO SCHOOL FOR THIS but kernel number increases depending on size of indices
@@ -394,7 +392,7 @@ def Gather(input, indices, axis=0):
     args = [[(0,x) if j != axis else (i,i+1) for j, x in enumerate(input_sh)] for i in indices]
     return input.shrink(arg=tuple(args[0])).cat(*[input.shrink(arg=tuple(arg)) for arg in args[1:]], dim=axis).reshape(ret_shape)
   else: # NOTE faster gather with larger indices probably, fixed number of kernels, but exceeds 199 kernels for openpilot
-    return input.__getitem__(tuple([slice(None,None,None) if i != axis else indices for i in range(input.ndim)]))
+    return input.__getitem__(tuple([slice(None) if i != axis else indices for i in range(input.ndim)]))
 
 def GatherElements(input, indices, axis):
   indices = indices.sign().contiguous().__neg__().contiguous().relu() * input.shape[axis] + indices
@@ -556,7 +554,7 @@ def Compress(inp, condition, axis=None):
 
   con_np = condition.numpy()
   con = Tensor(np.arange(condition.shape[0])[con_np]) # no boolean indexing in Tensor
-  return inp.__getitem__(tuple([slice(None,None,None) if i != axis else con for i in range(inp.ndim)]))
+  return inp.__getitem__(tuple([slice(None) if i != axis else con for i in range(inp.ndim)]))
 
 def Acos(x):
   negate = (x < 0)
