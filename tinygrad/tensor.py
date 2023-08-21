@@ -577,7 +577,7 @@ class Tensor:
 
   # ***** broadcasted binary mlops *****
 
-  def _broadcasted(self, fxn:Type[Function], y:Union[Tensor, float], reverse:bool=False) -> Tensor:
+  def _broadcasted(self, fxn:Type[Function], y:Union[Tensor, float, np.ndarray], reverse:bool=False) -> Tensor:
     x: Tensor = self
     if not isinstance(y, Tensor):
       y = Tensor(y, device=self.device, requires_grad=False, dtype=self.dtype if self.dtype != dtypes.bool and self.dtype.__class__ is not ImageDType else dtypes.float32)
