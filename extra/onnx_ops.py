@@ -427,8 +427,8 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
     return ret.clip(0, x_len-1)
   def _coordinate_transformation(x_out, y_out, output_shape, scales_lol, roi=None):
     if coordinate_transformation_mode == "half_pixel":
-      x_out = (x_out + 0.5)/Tensor(scales_lol[-1]) - 0.5 # TODO Tensor() because try (((Tensor([0,1,2,3,4,5])+0.5)/3.5 - 0.5)) with LLVM or METAL, inaccuacy.
-      y_out = (y_out + 0.5)/Tensor(scales_lol[-2]) - 0.5
+      x_out = (x_out + 0.5)/scales_lol[-1] + 1 - 1.5 # HACK the +1 hacks round the inaccuracy from fsub in llvm
+      y_out = (y_out + 0.5)/scales_lol[-2] + 1 - 1.5 # HACK because we're using x_out and y_out as idx, we need accuracy
     elif coordinate_transformation_mode == "align_corners":
       x_out = x_out * (X.shape[-1] - 1) / (output_shape[-1] - 1)
       y_out = y_out * (X.shape[-2] - 1) / (output_shape[-2] - 1)
@@ -485,8 +485,11 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
   y_out = Tensor.arange(output_shape[-2])
   if mode == "nearest":
     x_out, y_out = _coordinate_transformation(x_out, y_out, output_shape, scales_lol, roi)
+    print(nearest_mode)
+    print(y_out.numpy())
     x_out = _nearest_mode(x_out, nearest_mode, X.shape[-1])
     y_out = _nearest_mode(y_out, nearest_mode, X.shape[-1])
+    print(y_out.numpy())
     return _nearest_gather(X, x_out, y_out)
   elif mode == "linear":
     x_out, y_out = _coordinate_transformation(x_out, y_out, output_shape_, scales, roi)
@@ -509,7 +512,7 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
           ret.append((corners[0,0,0,0] * (x2 - x) * (y2 - y) + corners[0,0,0,1] * (x - x1) * (y2 - y) + corners[0,0,1,0] * (x2 - x) * (y - y1) + corners[0,0,1,1] * (x - x1) * (y - y1)) / ((x2 - x1) * (y2 - y1)))
     return Tensor(ret).reshape(output_shape)
   elif mode == "cubic":
-    raise Exception("cubic interpolation is not implemented")
+    raise NotImplementedError("cubic interpolation is not implemented")
 
 def CenterCropPad(input, shape, axes=None):
   if not axes: axes = list(range(input.ndim))

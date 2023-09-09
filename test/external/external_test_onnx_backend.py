@@ -206,12 +206,6 @@ if getenv('GPU') or getenv('METAL') or getenv('MPS'):
   backend_test.exclude('test_mish_expanded_cpu') # weird inaccuracy
   backend_test.exclude('test_eyelike_with_dtype_cpu') # I'm not sure about this...
 
-if getenv('METAL') or getenv('MPS'):
-  # (((Tensor([0,1,2,3,4,5])+0.5)/3.5 - 0.5)) Try this with METAL and LLVM, weird weird inaccuracy
-  backend_test.exclude('test_resize_upsample_sizes_nearest_axes_2_3_cpu')
-  backend_test.exclude('test_resize_upsample_sizes_nearest_axes_3_2_cpu')
-  backend_test.exclude('test_resize_upsample_sizes_nearest_cpu')
-
 # disable model tests for now since they are slow
 if not getenv("MODELTESTS"):
   for x in backend_test.test_suite:
