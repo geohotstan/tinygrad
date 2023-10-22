@@ -95,8 +95,9 @@ class ShapeTracker:
 
   def unbind(self) -> ShapeTracker: return ShapeTracker(tuple(v.unbind() for v in self.views))
 
-  def to_movement_ops(self) -> List[Tuple[MovementOps, Tuple]]:
+  def to_movement_ops(self, buf_shape) -> List[Tuple[MovementOps, Tuple]]:
     to_apply:List[Tuple[MovementOps, Tuple]] = []
+    print(self.views)
     for v in self.views:
       real_shape = tuple(y-x for x,y in v.mask) if v.mask else v.shape
       real_offset = v.offset + (sum(x*st for (x,_),st in zip(v.mask, v.strides)) if v.mask else 0)
@@ -104,7 +105,38 @@ class ShapeTracker:
       # then, we make it the correct shape
       # then, we apply permutations
       # TODO: don't use as_strided
-      to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
+      
+      odd_offset = real_offset % 2 == 1
+      intermediate_shape = [st for st in v.strides if st != 0]
+      movementops_reshape_args = [1 if st == 0 else st for st in v.strides]
+      # reshape_arg = [1 if st == 0 else None for st in v.strides]
+      lol = [st for st in v.strides]
+      reshape_args = []
+      print(f"{real_shape=}")
+      print(f"{real_offset=}")
+      print(f"{v.strides=}")
+      print([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)])
+      # to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
+
+      permute_args = [i for i,_ in sorted(enumerate(v.strides), key=lambda x: x[1], reverse=True)]
+      shrink_args = [(0, real_shape[i]) for i in permute_args]
+      stride_args = [v.strides[i] for i in permute_args]
+
+      # TODO
+      if v.offset: to_apply.append((MovementOps.SHRINK, tuple(((real_offset, prod(buf_shape)),))))
+      # no need to reshape cuz numpy and torch handles reshape
+      print(buf_shape)
+      if prod(buf_shape) == prod(real_shape):
+        to_apply.append((MovementOps.RESHAPE, real_shape))
+      else:
+        to_apply.append((MovementOps.EXPAND, (8,7)))
+        to_apply.append((MovementOps.RESHAPE, (7,8)))
+        to_apply.append((MovementOps.STRIDE, tuple(stride_args)))
+        to_apply.append((MovementOps.SHRINK, tuple(shrink_args)))
+        to_apply.append((MovementOps.PERMUTE, tuple(permute_args)))
+        buf_shape = [a[1] for a in shrink_args]
+      
+      print(f"I ADDED THIS {to_apply=}")
       # then, we apply pre expand pads
       if v.mask is not None:
         pre_expand_pads = tuple((x,s-y) if st != 0 else (0,0) for (x,y),s,st in zip(v.mask, v.shape, v.strides))
@@ -116,6 +148,7 @@ class ShapeTracker:
       if any(s != 1 and st == 0 for s,st in zip(real_shape, v.strides)): to_apply.append((MovementOps.EXPAND, real_shape))
       # lastly, we apply post expand pads
       if v.mask is not None and any(x != (0,0) for x in post_expand_pads): to_apply.append((MovementOps.PAD, post_expand_pads))
+      print(f"{to_apply=}")
     return to_apply
 
   # these are multiview strides, value is None if it's not a simple strided dimension
