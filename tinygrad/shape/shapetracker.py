@@ -106,16 +106,12 @@ class ShapeTracker:
       # then, we apply permutations
       # TODO: don't use as_strided
       # to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
-      if not isinstance(buf_shape, list): buf_shape = list(buf_shape)
-      odd_offset = real_offset % 2 == 1
-      intermediate_shape = [st for st in v.strides if st != 0]
-      # reshape_args = [1 if st == 0 else st for st in v.strides]
-      lol = [st for st in v.strides]
       print(f"{real_shape=}")
       print(f"{real_offset=}")
       print(f"{v.strides=}")
       print([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)])
 
+      if not isinstance(buf_shape, list): buf_shape = list(buf_shape)
       no_zero_strides = [st for st in v.strides if st != 0]
       permute_args = [i for i,_ in sorted(enumerate(no_zero_strides), key=lambda x: x[1], reverse=True)]
       new_perm_arg = [0] * len(permute_args)
@@ -143,7 +139,7 @@ class ShapeTracker:
       elif any(s<0 for s in v.strides):
         assert False, "need to support negative strides"
       elif all(s==0 for s in v.strides) and final_shape:
-        if buf_shape:
+        if buf_shape: 
           to_apply.append((MovementOps.RESHAPE, (-1)))
           to_apply.append((MovementOps.SHRINK, (((real_offset,real_offset+1),))))
         to_apply.append((MovementOps.EXPAND, tuple(final_shape)))
@@ -157,7 +153,7 @@ class ShapeTracker:
 
         # find max shape needed
         # to_apply.append((MovementOps.SHRINK, ((0,max_shape_needed),), ))
-
+        
         # make sliding window
         expand_arg =  [flattened_shape+1] * (len(no_zero_shrink_args)-1) + [flattened_shape] # TODO naive way, need to prune using strides # 1 in strides is always at end
         reshape_arg =  [flattened_shape] + [flattened_shape+1] * (len(no_zero_shrink_args)-1) # TODO naive way, need to prune using strides
@@ -183,14 +179,13 @@ class ShapeTracker:
           to_apply.append((MovementOps.PAD, pre_expand_pads))
           real_shape = tuple(x+s[0]+s[1] for x,s in zip(real_shape, pre_expand_pads))
       # then, we do any expands
-      if any(s != 1 and st == 0 for s,st in zip(real_shape, v.strides)):
-        to_apply.append((MovementOps.EXPAND, real_shape))
+      if any(s != 1 and st == 0 for s,st in zip(real_shape, v.strides)): to_apply.append((MovementOps.EXPAND, real_shape))
       buf_shape = list(real_shape)
       # lastly, we apply post expand pads
-      if v.mask is not None and any(x != (0,0) for x in post_expand_pads):
+      if v.mask is not None and any(x != (0,0) for x in post_expand_pads): 
         to_apply.append((MovementOps.PAD, post_expand_pads))
         for i,lol in enumerate(post_expand_pads):
-          if lol != (0,0):
+          if lol != (0,0): 
             buf_shape[i] += sum(lol)
       print(f"{to_apply=}")
     return to_apply

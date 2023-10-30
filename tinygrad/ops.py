@@ -126,13 +126,6 @@ class Interpreted:
         buf = self.to_underlying(self.buffer.fromCPU(np.array(ast.arg.val, dtype=ast.arg.dtype.np)))
       print(f"{buf=}")
       print(f"{buf.shape=}")
-      '''
-      import torch
-      print(f"{buf.shape=}")
-      lol = torch.as_strided(buf.contiguous(), [1, 3, 1], (0, 1, 0), 4)
-      print(lol)
-      print('start')
-      '''
       for mop,arg in ast.arg.st.to_movement_ops(buf.shape):
         buf = self.fxn_for_op[mop](buf, arg)
         # print(f"{buf=}")
