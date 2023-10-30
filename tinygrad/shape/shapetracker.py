@@ -105,38 +105,76 @@ class ShapeTracker:
       # then, we make it the correct shape
       # then, we apply permutations
       # TODO: don't use as_strided
-      
+      # to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
+      if not isinstance(buf_shape, list): buf_shape = list(buf_shape)
       odd_offset = real_offset % 2 == 1
       intermediate_shape = [st for st in v.strides if st != 0]
-      movementops_reshape_args = [1 if st == 0 else st for st in v.strides]
-      # reshape_arg = [1 if st == 0 else None for st in v.strides]
+      # reshape_args = [1 if st == 0 else st for st in v.strides]
       lol = [st for st in v.strides]
-      reshape_args = []
       print(f"{real_shape=}")
       print(f"{real_offset=}")
       print(f"{v.strides=}")
       print([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)])
-      # to_apply.append((MovementOps.AS_STRIDED, ([s if st != 0 else 1 for s,st in zip(real_shape, v.strides)], v.strides, real_offset)))
 
-      permute_args = [i for i,_ in sorted(enumerate(v.strides), key=lambda x: x[1], reverse=True)]
-      shrink_args = [(0, real_shape[i]) for i in permute_args]
-      stride_args = [v.strides[i] for i in permute_args]
+      no_zero_strides = [st for st in v.strides if st != 0]
+      permute_args = [i for i,_ in sorted(enumerate(no_zero_strides), key=lambda x: x[1], reverse=True)]
+      new_perm_arg = [0] * len(permute_args)
+      perm_lol = [i for i,_ in sorted(enumerate(v.strides), key=lambda x: x[1], reverse=True)]
+      for new, old in enumerate(permute_args): new_perm_arg[old] = new
+      print(f"{permute_args=} {new_perm_arg=} {perm_lol=}")
+      if not new_perm_arg: new_perm_arg = perm_lol
+      final_shape = [s if st != 0 else 1 for s,st in zip(real_shape, v.strides)]
+      no_zero_strides_final_shape = [s for s,st in zip(real_shape, v.strides) if st != 0]
+      no_zero_shrink_args = [(0, sh) for sh in no_zero_strides_final_shape]
+      no_zero_stride_args = [s for s in v.strides if s != 0]
+
+      in_order = permute_args == sorted(permute_args)
 
       # TODO
-      if v.offset: to_apply.append((MovementOps.SHRINK, tuple(((real_offset, prod(buf_shape)),))))
-      # no need to reshape cuz numpy and torch handles reshape
-      print(buf_shape)
-      if prod(buf_shape) == prod(real_shape):
-        to_apply.append((MovementOps.RESHAPE, real_shape))
+      print(buf_shape, final_shape)
+
+      flattened_shape = prod(buf_shape) - real_offset
+      max_shape_needed = sum([abs(sh*st) for sh, st in zip(no_zero_strides_final_shape,no_zero_stride_args)])
+
+
+      if not v.shape:
+        if len(buf_shape) > 1: to_apply.append((MovementOps.RESHAPE, (-1)))
+        if real_offset > 0: to_apply.append((MovementOps.SHRINK, tuple(((real_offset, real_offset+1),))))
+      elif any(s<0 for s in v.strides):
+        assert False, "need to support negative strides"
+      elif all(s==0 for s in v.strides) and final_shape:
+        if buf_shape:
+          to_apply.append((MovementOps.RESHAPE, (-1)))
+          to_apply.append((MovementOps.SHRINK, (((real_offset,real_offset+1),))))
+        to_apply.append((MovementOps.EXPAND, tuple(final_shape)))
+      elif v.contiguous:
+        to_apply.append((MovementOps.RESHAPE, (-1)))
+        to_apply.append((MovementOps.SHRINK, tuple(((real_offset, prod(final_shape)+real_offset),))))
+        to_apply.append((MovementOps.RESHAPE, tuple(final_shape)))
       else:
-        to_apply.append((MovementOps.EXPAND, (8,7)))
-        to_apply.append((MovementOps.RESHAPE, (7,8)))
-        to_apply.append((MovementOps.STRIDE, tuple(stride_args)))
-        to_apply.append((MovementOps.SHRINK, tuple(shrink_args)))
-        to_apply.append((MovementOps.PERMUTE, tuple(permute_args)))
-        buf_shape = [a[1] for a in shrink_args]
-      
+        if len(buf_shape) > 1: to_apply.append((MovementOps.RESHAPE, (-1)))
+        if real_offset > 0: to_apply.append((MovementOps.SHRINK, tuple(((real_offset, prod(buf_shape)),))))
+
+        # find max shape needed
+        # to_apply.append((MovementOps.SHRINK, ((0,max_shape_needed),), ))
+
+        # make sliding window
+        expand_arg =  [flattened_shape+1] * (len(no_zero_shrink_args)-1) + [flattened_shape] # TODO naive way, need to prune using strides # 1 in strides is always at end
+        reshape_arg =  [flattened_shape] + [flattened_shape+1] * (len(no_zero_shrink_args)-1) # TODO naive way, need to prune using strides
+        pruned_shape = [(0,sh*st) for sh, st in zip(no_zero_strides_final_shape,no_zero_stride_args)] # pruned the shape using strided
+        assert prod(reshape_arg) < 10000000000, f"{reshape_arg=} AWWW FUCK TOO BIG YO"
+        to_apply.append((MovementOps.EXPAND, tuple(expand_arg)))
+        to_apply.append((MovementOps.RESHAPE, tuple(reshape_arg)))
+        # to_apply.append((MovementOps.SHRINK, tuple(pruned_shape)))
+
+        # permute if not in order
+        if not in_order: to_apply.append((MovementOps.PERMUTE, tuple(new_perm_arg)))
+
+        to_apply.append((MovementOps.STRIDE, tuple(no_zero_stride_args)))
+        to_apply.append((MovementOps.SHRINK, tuple(no_zero_shrink_args)))
+        to_apply.append((MovementOps.RESHAPE, tuple(final_shape)))
       print(f"I ADDED THIS {to_apply=}")
+
       # then, we apply pre expand pads
       if v.mask is not None:
         pre_expand_pads = tuple((x,s-y) if st != 0 else (0,0) for (x,y),s,st in zip(v.mask, v.shape, v.strides))
@@ -145,9 +183,15 @@ class ShapeTracker:
           to_apply.append((MovementOps.PAD, pre_expand_pads))
           real_shape = tuple(x+s[0]+s[1] for x,s in zip(real_shape, pre_expand_pads))
       # then, we do any expands
-      if any(s != 1 and st == 0 for s,st in zip(real_shape, v.strides)): to_apply.append((MovementOps.EXPAND, real_shape))
+      if any(s != 1 and st == 0 for s,st in zip(real_shape, v.strides)):
+        to_apply.append((MovementOps.EXPAND, real_shape))
+      buf_shape = list(real_shape)
       # lastly, we apply post expand pads
-      if v.mask is not None and any(x != (0,0) for x in post_expand_pads): to_apply.append((MovementOps.PAD, post_expand_pads))
+      if v.mask is not None and any(x != (0,0) for x in post_expand_pads):
+        to_apply.append((MovementOps.PAD, post_expand_pads))
+        for i,lol in enumerate(post_expand_pads):
+          if lol != (0,0):
+            buf_shape[i] += sum(lol)
       print(f"{to_apply=}")
     return to_apply
 

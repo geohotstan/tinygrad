@@ -124,18 +124,22 @@ class Interpreted:
         buf = self.to_underlying(inputs[ast.arg.idx-1].realized)
       elif ast.op == BufferOps.CONST:
         buf = self.to_underlying(self.buffer.fromCPU(np.array(ast.arg.val, dtype=ast.arg.dtype.np)))
-      import torch
       print(f"{buf=}")
+      print(f"{buf.shape=}")
+      '''
+      import torch
       print(f"{buf.shape=}")
       lol = torch.as_strided(buf.contiguous(), [1, 3, 1], (0, 1, 0), 4)
       print(lol)
       print('start')
-      for mop,arg in ast.arg.st.to_movement_ops(buf.shape): 
+      '''
+      for mop,arg in ast.arg.st.to_movement_ops(buf.shape):
         buf = self.fxn_for_op[mop](buf, arg)
-        print(f"{buf=}")
+        # print(f"{buf=}")
+        print(f"{buf.shape=}")
+        print(f"{mop=} {arg=}")
         print("ROUND FINISHED")
       print('end')
-      exit()
       return self.from_underlying(buf)
     if TernaryOps.MULACC in self.fxn_for_op and ast.op == ReduceOps.SUM and isinstance(ast.src[0], LazyOp) and ast.src[0].op == BinaryOps.MUL:
       ast = LazyOp(TernaryOps.MULACC, ast.src[0].src, ast.arg)
