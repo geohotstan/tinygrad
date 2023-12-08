@@ -197,7 +197,7 @@ class Tensor:
 
   @staticmethod
   def randint(*shape, low=0, high=10, dtype=dtypes.int32, **kwargs) -> Tensor:
-    if dtype.is_unsigned() and low < 0: raise RuntimeError("low is out of bounds for unsigned char")
+    if (dtype.is_unsigned() and low < 0) or (dtype is dtypes.bool and (low < 0 or high > 2)): raise RuntimeError(f"range is out of bounds for {dtype}")
     return (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtype) if dtype.is_int() else (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtypes.int32).cast(dtype)
 
   @staticmethod
