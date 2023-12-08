@@ -198,7 +198,7 @@ class Tensor:
   @staticmethod
   def randint(*shape, low=0, high=10, dtype=dtypes.int32, **kwargs) -> Tensor:
     if (dtype.is_unsigned() and low < 0) or (dtype is dtypes.bool and (low < 0 or high > 2)): raise RuntimeError(f"range is out of bounds for {dtype}")
-    return (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtype) if dtype.is_int() else (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtypes.int32).cast(dtype)
+    return (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtype) if dtype.is_int() or dtype is dtypes.bool else (Tensor.rand(*shape, **kwargs)*(high-low)+low).cast(dtypes.int32).cast(dtype)
 
   @staticmethod
   def normal(*shape, mean=0.0, std=1.0, **kwargs) -> Tensor: return (std * Tensor.randn(*shape, **kwargs)) + mean

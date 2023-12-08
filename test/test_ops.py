@@ -1314,7 +1314,6 @@ class TestOps(unittest.TestCase):
     # currently we return ValueError: setting an array element with a sequence.
     # E   TypeError: only integer tensors of a single element can be converted to an index
 
-
   def test_gather(self):
     # indices cannot have gradient
     # indices cannot be negative (torch gather)
