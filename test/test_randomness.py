@@ -116,7 +116,7 @@ class TestRandomness(unittest.TestCase):
     # no-replacement isn't supported, unless taking only one sample
     w = [0.1, 0.9]
     self.assertRaises(AssertionError, lambda: Tensor(w).multinomial(100, replacement=False))
-    tiny_samples = [Tensor(w).multinomial(1, replacement=False).numpy().item() for _ in range(1000)]
+    tiny_samples = [Tensor(w).multinomial(1, replacement=False).item() for _ in range(1000)]
     torch_samples = [torch.tensor(w).multinomial(1, replacement=False).item() for _ in range(1000)]
     self.assertTrue(equal_distribution(lambda *_: Tensor(tiny_samples), lambda _: torch.tensor(torch_samples)))
 

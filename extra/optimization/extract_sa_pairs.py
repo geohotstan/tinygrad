@@ -117,9 +117,9 @@ if __name__ == "__main__":
     loss.backward()
     optim.step()
     t.set_description(f"loss {loss.numpy():7.2f}, test loss {test_loss:7.2f}")
-    losses.append(loss.numpy().item())
+    losses.append(loss.item())
     test_losses.append(test_loss)
-    if i % 10: test_loss = (net(X_test)[:, 0:1]-V_test).square().mean().numpy().item()
+    if i % 10: test_loss = (net(X_test)[:, 0:1]-V_test).square().mean().item()
 
   safe_save(get_state_dict(net), "/tmp/qnet.safetensors")
 

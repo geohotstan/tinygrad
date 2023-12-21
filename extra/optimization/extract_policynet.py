@@ -98,11 +98,11 @@ if __name__ == "__main__":
     accuracy = (cat == y).mean()
     t.set_description(f"loss {loss.numpy():7.2f} accuracy {accuracy.numpy()*100:7.2f}%, test loss {test_loss:7.2f} test accuracy {test_accuracy*100:7.2f}%")
 
-    losses.append(loss.numpy().item())
+    losses.append(loss.item())
     test_losses.append(test_loss)
     if i % 10:
       out = net(X_test)
-      test_loss = out.sparse_categorical_crossentropy(V_test).square().mean().numpy().item()
+      test_loss = out.sparse_categorical_crossentropy(V_test).square().mean().item()
       cat = out.argmax(axis=-1)
       test_accuracy = (cat == y).mean().numpy()
 

@@ -452,7 +452,7 @@ def tilde(x: Tensor) -> Tensor:
   return (x + 1) * -1  # this seems to be what the ~ operator does in pytorch for non bool
 
 def lengths_to_padding_mask(lens:Tensor) -> Tensor:
-  bsz, max_lens = lens.shape[0], lens.max().numpy().item()
+  bsz, max_lens = lens.shape[0], lens.max().item()
   mask = Tensor.arange(max_lens).to(lens.device).reshape(1, max_lens)
   mask = mask.expand(bsz, -1) >= lens.reshape(bsz, 1).expand(-1, max_lens)
   return mask.cast(dtypes.bool)
