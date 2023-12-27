@@ -53,15 +53,16 @@ def get_run_onnx(onnx_model: ModelProto):
     if inp.data_type in (1,10,6,7,5):
       # TODO: this is shared with below
       if len(inp.float_data) > 0:
-        ret = Tensor(np.array(inp.float_data, dtype=np.float32).reshape(inp.dims), requires_grad=False)
+        ret = Tensor(list(inp.float_data), dtype=dtypes.default_float, requires_grad=False).reshape(tuple(inp.dims))
       elif len(inp.int64_data) > 0:
-        ret = Tensor(np.array(inp.int64_data, dtype=np.int64).reshape(inp.dims), requires_grad=False)
+        ret = Tensor(list(inp.int64_data), dtype=dtypes.int64, requires_grad=False).reshape(tuple(inp.dims))
       elif len(inp.int32_data) > 0:
-        ret = Tensor(np.array(inp.int32_data, dtype=np.int32).reshape(inp.dims), requires_grad=False)
+        ret = Tensor(list(inp.int32_data), dtype=dtypes.int32, requires_grad=False).reshape(tuple(inp.dims))
       else:
         ret = Tensor(np.frombuffer(inp.raw_data, dtype=tensor_dtype_to_np_dtype(inp.data_type)).reshape(inp.dims).copy(), requires_grad=False)
         print("FUUUCK")
         print(inp.data_type)
+        print(inp)
         print(ret.dtype)
     else:
       raise Exception(f"bad data type {inp.name} {inp.dims} {inp.data_type}")
