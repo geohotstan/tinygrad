@@ -9,13 +9,14 @@ import numpy as np
 
 tensor_methods = {"Neg", "Reciprocal", "Sqrt", "Sign", "Abs", "Exp", "Log", "Mish", "Sin", "Cos", "Tan", "Relu", "Sigmoid", "MatMul",
                   "Floor", "Ceil", "Softplus", "HardSwish", "Where", "Mul", "Sinh", "Cosh", "Tanh", "Softsign", "Asinh", "Acosh", "Atanh",
-                  "Elu", "Celu", "Div", "Pow"}
+                  "Elu", "Celu", "Pow"}
 
 # **************** Free Ops ****************
 
 def Identity(x: Tensor): return x
 def Add(x: Tensor, other: Tensor, broadcast=None): return x + other if isinstance(x.dtype, ImageDType) else (x + other).cast(x.dtype)
 def Sub(x: Union[Tensor, Any], other: Tensor): return x - other
+def Div(x: Tensor, other: Tensor): return x / other if isinstance(x.dtype, ImageDType) else x.div(other).floor()   # TODO: this has dtype issues
 def Less(x:Tensor,y:Tensor): return x < y
 def LessOrEqual(x:Tensor,y:Tensor): return x <= y
 def Greater(x:Tensor,y:Tensor): return x > y
