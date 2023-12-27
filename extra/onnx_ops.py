@@ -33,12 +33,12 @@ def CastLike(x: Tensor, target_type: Tensor, saturate=1): return x.cast(target_t
 # **************** Simple Ops ****************
 
 def Constant(value: Tensor=None, value_float=None, value_floats=None, value_int=None, value_ints=None, value_string=None, value_strings=None):
-  if value is not None: return value
-  if value_float is not None: return Tensor(value_float, dtype=dtypes.float32, requires_grad=False)
-  if value_floats is not None: return Tensor(list(value_floats), dtype=dtypes.float32, requires_grad=False)
-  if value_int is not None: return Tensor(value_int, dtype=dtypes.int64, requires_grad=False)
-  if value_ints is not None: return Tensor(list(value_ints), dtype=dtypes.int64, requires_grad=False)
-  if value_string is not None or value_strings is not None: raise NotImplementedError('value_string or value_strings not implemented for Constant op')
+  if value: return value
+  if value_float: return Tensor(value_float, dtype=dtypes.float32, requires_grad=False)
+  if value_floats: return Tensor(list(value_floats), dtype=dtypes.float32, requires_grad=False)
+  if value_int: return Tensor(value_int, dtype=dtypes.int64, requires_grad=False)
+  if value_ints: return Tensor(list(value_ints), dtype=dtypes.int64, requires_grad=False)
+  if value_string or value_strings: raise NotImplementedError('value_string or value_strings not implemented for Constant op')
 
 def HardSigmoid(x: Tensor, alpha=0.2, beta=0.5): return (alpha*x + beta).clip(0, 1)
 def Gelu(x:Tensor, approximate=None): return x.gelu() if approximate == "tanh" else 0.5 * x * (1 + Erf(x/math.sqrt(2)))
