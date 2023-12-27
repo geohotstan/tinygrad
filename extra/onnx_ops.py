@@ -16,7 +16,7 @@ tensor_methods = {"Neg", "Reciprocal", "Sqrt", "Sign", "Abs", "Exp", "Log", "Mis
 def Identity(x: Tensor): return x
 def Add(x: Tensor, other: Tensor, broadcast=None): return x + other if isinstance(x.dtype, ImageDType) else (x + other).cast(x.dtype)
 def Sub(x: Union[Tensor, Any], other: Tensor): return x - other
-def Div(x: Tensor, other: Tensor): return x / other if isinstance(x.dtype, ImageDType) else x.div(other).floor()   # TODO: this has dtype issues
+def Div(x: Tensor, other: Tensor): return x / other if x.dtype == dtypes.float or isinstance(x.dtype, ImageDType) else x.div(other).floor()   # TODO: this has dtype issues
 def Less(x:Tensor,y:Tensor): return x < y
 def LessOrEqual(x:Tensor,y:Tensor): return x <= y
 def Greater(x:Tensor,y:Tensor): return x > y
