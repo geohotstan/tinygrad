@@ -30,7 +30,7 @@ def get_schedule(onnx_data) -> Tuple[List[ScheduleItem], List[ScheduleItem]]:
 
   # run the model
   inputs = {k:Tensor.empty(*shp) for k,shp in input_shapes.items()}
-  ret: Tensor = next(iter(run_onnx(inputs).values())).contiguous()
+  ret: Tensor = next(iter(run_onnx(inputs).values())).cast(dtypes.float32).contiguous()
   schedule = ret.lazydata.schedule()
 
   # filter schedule that don't depend on the inputs
