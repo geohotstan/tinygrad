@@ -63,6 +63,7 @@ def get_run_onnx(onnx_model: ModelProto):
         if CI and (dtype := tensor_dtype_to_np_dtype(inp.data_type)) is np.half:
           ret = Tensor(np.frombuffer(inp.raw_data, dtype=dtype).reshape(inp.dims).astype(np.float32).copy(), requires_grad=False)
         else:
+          ret = Tensor(np.frombuffer(inp.raw_data, dtype=dtype).reshape(inp.dims).copy(), requires_grad=False)
       raise Exception(f"bad data type {inp.name} {inp.dims} {inp.data_type}")
     return ret
 
