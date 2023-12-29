@@ -60,12 +60,12 @@ def get_run_onnx(onnx_model: ModelProto):
         ret = Tensor(list(inp.int32_data), dtype=dtypes.int32, requires_grad=False).reshape(tuple(inp.dims))
       else:
         # TODO half broken in CI for GPU backend
-        if CI and (dtype := tensor_dtype_to_np_dtype(inp.data_type)) is np.half:
+        if CI and (dtype := tensor_dtype_to_np_dtype(inp.data_type)) == np.half:
           ret = Tensor(np.frombuffer(inp.raw_data, dtype=dtype).reshape(inp.dims).astype(np.float32).copy(), requires_grad=False)
         else:
           ret = Tensor(np.frombuffer(inp.raw_data, dtype=dtype).reshape(inp.dims).copy(), requires_grad=False)
-      raise Exception(f"bad data type {inp.name} {inp.dims} {inp.data_type}")
-    return ret
+      return ret
+    raise Exception(f"bad data type {inp.name} {inp.dims} {inp.data_type}")
 
   def attribute_parse(a: AttributeProto) -> float | int | str | Tensor | tuple[float] | tuple[int]:
     # TODO: this is not complete, see onnx/onnx_ml_pb2.pyi for a complete list
