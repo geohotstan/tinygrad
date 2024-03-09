@@ -1,9 +1,18 @@
 from __future__ import annotations
-import functools, operator, itertools
+import functools, operator, itertools, math
 from dataclasses import dataclass
-from typing import Tuple, List, Optional, Dict, Set, cast
+from typing import Tuple, List, Optional, Dict, Set, cast, Union
 from tinygrad.helpers import prod, all_int, argsort
 from tinygrad.shape.symbolic import Node, NumNode, Variable, sint
+
+def un1d(shape:Tuple[sint, ...], offs:sint) -> List[sint]:
+  strides = strides_for_shape(shape)
+  result = []
+  for stride in strides:
+    here = offs // stride if stride else 0
+    result.append(here)
+    offs -= here * stride
+  return result
 
 @functools.lru_cache(maxsize=None)
 def canonicalize_strides(shape:Tuple[sint, ...], strides:Tuple[sint, ...]) -> Tuple[sint, ...]:
@@ -218,3 +227,71 @@ class View:
         return View.create(new_shape, new_strides, self.offset + extra_offset, new_mask)
 
     return None
+
+  @functools.lru_cache(maxsize=None)  # pylint: disable=method-cache-max-size-none
+  def __add__(self, other:View) -> Union[View, None]:
+    if self.contiguous: return other
+    if other.contiguous and other.shape == self.shape: return self
+    if other.contiguous and other.size() == self.size() and (ret := self.reshape(other.shape)) is not None: return ret
+    # if not self.mask and other.offset == 0 and None not in (rstrides := ShapeTracker((self, other)).real_strides()):
+      # return View.create(other.shape, cast(Tuple[sint, ...], rstrides), self.offset, other.mask)
+    if other.mask:
+      for b,e in other.mask:
+        if not (b < e): return View.create(other.shape, (0,) * len(other.shape), 0, ((0,0),) * len(other.shape))
+      merged = self + other.shrink(other.mask)
+      return merged and merged.pad(tuple((b,s-e) for (b,e),s in zip(other.mask, other.shape)))
+
+    # Project vm1's offset and strides on to vm2.
+    origin = un1d(self.shape, other.offset)
+    terms: List[List[Tuple[int, sint]]] = [[] for _ in origin]
+    strides: List[sint] = [0] * len(other.shape)
+    for d1, st in enumerate(other.strides):
+      if st == 0: continue
+      for d2, (o, s1) in enumerate(zip(origin, un1d(self.shape, other.offset + st))):
+        if (s1 := s1 - o) == 0: continue
+        terms[d2].append((d1, s1))
+        strides[d1] += s1 * self.strides[d2]
+
+    # Merge dimensions in vm2 if required.
+    # NB: Merging too many dimensions can make it difficult to project vm2's mask, hence only combining when required.
+    idxs: List[Node] = [Variable(f"idx{i}", 0, s-1) for i,s in enumerate(other.shape)]
+    merged_size, merged_term = 1, NumNode(0)
+    extents: List[Tuple[sint, Node]] = []
+    for term, s, o in zip(reversed(terms), reversed(self.shape), reversed(origin)):
+      merged_term += Variable.sum([idxs[d1] * (s1 * merged_size) for d1, s1 in term]) + o * merged_size
+      merged_size *= s
+      if not (merged_term >= merged_size) and not (merged_term < 0):
+        extents.append((merged_size, merged_term))
+        merged_size, merged_term = 1, NumNode(0)
+    if merged_term: return None
+    if (self_shape := tuple(s for s,_ in reversed(extents))) != self.shape:
+      return (reshaped_self := self.reshape(self_shape)) and reshaped_self + other
+
+    if self.mask:
+      # Try to project vm2's mask on to vm1.
+      newb, newe, bad = [0] * len(other.shape), list(other.shape), False
+      for d2, ((b, e), o, (_, t)) in enumerate(zip(self.mask, origin, reversed(extents))):
+        if not (t.min < b or t.max >= e): continue
+        if not isinstance(o, int) or not isinstance(b, int) or not isinstance(e, int):
+          bad = True
+          continue
+        term = terms[d2]
+        if len(term) != 1:
+          if not term and newe: newe[0] = 0
+          else: bad = True
+          continue
+        d1, s1 = term[0]
+        if not isinstance(s1, int) or not isinstance(newe[d1], int):
+          bad = True
+          continue
+        newb[d1] = max(newb[d1], math.ceil((b - o if s1 > 0 else e - o - 1) / s1))
+        newe[d1] = min(newe[d1], (b - o if s1 < 0 else e - o - 1) // s1 + 1)
+
+      # If any of vm1 was masked off, try again with that mask in place.
+      for b, e, s in zip(newb, newe, other.shape):
+        if b != 0 or e != s:
+          return self + View.create(other.shape, other.strides, other.offset, tuple(zip(newb, newe)))
+      # Otherwise if vm2's mask was violated, then cannot merge.
+      if bad: return None
+
+    return View.create(other.shape, tuple(strides), sum(o * s for o, s in zip(origin, self.strides)) + self.offset)
