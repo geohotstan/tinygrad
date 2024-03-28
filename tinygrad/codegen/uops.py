@@ -119,9 +119,9 @@ constant_folder = PatternMatcher([
   ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"},
                                {"uop": UOps.LOAD, "vin": ({"__name__": "buf"}, {"__name__": "idx"})})}, lambda buf, idx: UOp(UOps.NOOP)),
   # TODO: can do the invert of this (flip alt/load) when we fix double ops
-  ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"}, {"uop": UOps.ALU, "arg": TernaryOps.WHERE,
-                       "vin": ({"__name__": "gate"}, {"__name__": "alt"}, {"uop": UOps.LOAD, "vin": ({"__name__": "buf"}, {"__name__": "idx"})})})},
-    lambda buf, idx, gate, alt: UOp(UOps.STORE, None, (buf, idx, alt, gate))),
+  # ({"uop": UOps.STORE, "vin": ({"__name__": "buf"}, {"__name__": "idx"}, {"uop": UOps.ALU, "arg": TernaryOps.WHERE,
+                       # "vin": ({"__name__": "gate"}, {"__name__": "alt"}, {"uop": UOps.LOAD, "vin": ({"__name__": "buf"}, {"__name__": "idx"})})})},
+    # lambda buf, idx, gate, alt: UOp(UOps.STORE, None, (buf, idx, alt, gate))),
 ])
 
 class UOpGraph:
