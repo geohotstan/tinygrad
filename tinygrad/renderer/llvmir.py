@@ -72,8 +72,9 @@ def uops_to_llvm_ir(function_name:str, uops:UOpGraph) -> str:
   # extract global buffers (NOTE: this isn't right if DEFINE_GLOBAL is out of order)
   buf_to_dtype: Dict[Any, DType] = {}
   for u in uops:
-    if u.uop is UOps.DEFINE_GLOBAL and u.arg[0] > (l := len(buf_to_dtype)): buf_to_dtype.update({(l, f"fake_{l}", False): PtrDType(dtypes.float)})
-    if u.uop in (UOps.DEFINE_GLOBAL, UOps.DEFINE_VAR): buf_to_dtype.update({u.arg: u.dtype})
+    while u.uop is UOps.DEFINE_GLOBAL and len(buf_to_dtype) < u.arg[0]:
+      buf_to_dtype[(len(buf_to_dtype), f"fake_{len(buf_to_dtype)}")] = PtrDType(dtypes.float)
+    if u.uop in (UOps.DEFINE_GLOBAL, UOps.DEFINE_VAR): buf_to_dtype[u.arg] = u.dtype
 
   buf_index = {x:i for i,x in enumerate(buf_to_dtype.keys())}
 
