@@ -216,7 +216,8 @@ def uops_to_asm(lang:AssemblyLanguage, function_name:str, uops:UOpGraph) -> str:
         bufs.append((args[1], dtype))
         r[u] = f"%{args[1]}"
         if lang.load_global:
-          dt = dtypes.ulong if dtype.__class__ == PtrDType else dtype
+          # dt = dtypes.ulong if dtype.__class__ == PtrDType else dtype
+          dt = dtype
           kk(*lang.render_load(args[1], ssa(u, 'dat', dtype=lang.types[dt]), dt, ss=".param"))
       else: raise NotImplementedError(f"no code for {uop}")
 
