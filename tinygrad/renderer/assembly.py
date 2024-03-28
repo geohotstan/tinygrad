@@ -97,7 +97,7 @@ def uops_to_asm(lang:AssemblyLanguage, function_name:str, uops:UOpGraph) -> str:
       if o in u.vin and u is not n:
         u.vin = tuple(n if x == o else x for x in u.vin)
     if rew := matcher.rewrite(u): replace[u] = rew
-  uops.remove_childless(set(x for x in uops if x.uop in {UOps.PHI, UOps.ENDIF, UOps.ENDLOOP, UOps.STORE}))
+  uops.remove_childless(set(x for x in uops if x.uop in {UOps.DEFINE_GLOBAL, UOps.PHI, UOps.ENDIF, UOps.ENDLOOP, UOps.STORE}))
 
   def kk(*s: str): kernel.append("\n".join(s))
 
@@ -211,8 +211,10 @@ def uops_to_asm(lang:AssemblyLanguage, function_name:str, uops:UOpGraph) -> str:
         r[u] = f"%{args.expr}"
         if lang.load_global: kk(*lang.render_load(args.expr, ssa(u, 'dat', dtype=lang.types[dtype]), dtype, ss=".param"))
       elif uop is UOps.DEFINE_GLOBAL:
-        if len(bufs) < args[0]:
-          continue
+        while len(bufs) < args[0]:
+          bufs.append(f"fake_{len(bufs)}", PtrDType(dtypes.float))
+          r[u] = f"%fake_{len(bufs)}"
+          kk(*lang.render_load(f"fake_{len(bufs)}", ssa(u, 'dat', dtype=lang.types[dtypes.ulong]), dtypes.ulong, ss=".param"))
         assert len(bufs) == args[0], f"missed a global buffer {len(bufs)} {args}"
         bufs.append((args[1], dtype))
         r[u] = f"%{args[1]}"
