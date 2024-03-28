@@ -30,9 +30,9 @@ class TestLinearizer(unittest.TestCase):
   def test_load_removed(self):
     a = Tensor.rand(1).realize()
     b = Tensor.rand(1).realize()
-    # ta = Tensor.where(Tensor(True), a, b).numpy()
+    ta = Tensor.where(Tensor(True), a, b).numpy()
     tb = Tensor.where(Tensor(False), a, b).numpy()
-    # np.testing.assert_equal(a.numpy(), ta)
+    np.testing.assert_equal(a.numpy(), ta)
     np.testing.assert_equal(b.numpy(), tb)
 
   def test_multioutput(self):
