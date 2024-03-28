@@ -109,15 +109,12 @@ class CUDAProgram:
     if hasattr(self, 'module'): check(cuda.cuModuleUnload(self.module))
 
   def __call__(self, *args, global_size:Tuple[int,int,int]=(1,1,1), local_size:Tuple[int,int,int]=(1,1,1), vals:Tuple[int, ...]=(), wait=False):
-    if CUDACPU:
-      self.vargs = args+tuple(vals)
+    check(cuda.cuCtxSetCurrent(self.device.context))
+    if not hasattr(self, "vargs"):
+      self.c_args, self.vargs = encode_args(args, vals) #type: ignore
     else:
-      check(cuda.cuCtxSetCurrent(self.device.context))
-      if not hasattr(self, "vargs"):
-        self.c_args, self.vargs = encode_args(args, vals) #type: ignore
-      else:
-        for i in range(len(args)): self.c_args.__setattr__(f'f{i}', args[i])
-        for i in range(len(vals)): self.c_args.__setattr__(f'v{i}', vals[i])
+      for i in range(len(args)): self.c_args.__setattr__(f'f{i}', args[i])
+      for i in range(len(vals)): self.c_args.__setattr__(f'v{i}', vals[i])
     return cu_time_execution(lambda: check(cuda.cuLaunchKernel(self.prg, *global_size, *local_size, 0, None, None, self.vargs)), enable=wait)
 
 class CUDAAllocator(LRUAllocator):
