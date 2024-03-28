@@ -161,10 +161,10 @@ def uops_to_cstyle(lang:CStyleLanguage, function_name:str, uops:UOpGraph) -> str
         bufs.append((args.expr, (dtype,False)))
         r[u] = args.expr
       elif uop is UOps.DEFINE_GLOBAL:
-        while len(bufs) < args[0]: bufs.append((f"fake_{len(bufs)}", (PtrDType(dtypes.float),False)))
         assert len(bufs) == args[0], f"missed a global buffer {len(bufs)} {args}"
         bufs.append((args[1], (dtype,args[2])))
         r[u] = args[1]
+        while len(bufs) <= args[0]: bufs.append((f"fake_{len(bufs)}", (PtrDType(dtypes.float),False)))
       elif uop is UOps.WMMA: kk(f"{lang.render_dtype(dtype)} {ssa(u, 'wmma')} = __{args[0]}({r[vin[0]]}, {r[vin[1]]}, {r[vin[2]]});")
       elif uop is UOps.DEFINE_ACC: kk(f"{lang.render_dtype(dtype)} {ssa(u,'acc')} = {lang.render_const(args, dtype)};")
       elif uop is UOps.CONST: r[u] = lang.render_const(args, dtype) if args >= 0 else f"({lang.render_const(args, dtype)})"
