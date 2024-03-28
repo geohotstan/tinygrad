@@ -227,6 +227,8 @@ class CompiledASTRunner(JITRunner):
     lra = {}
     if global_size: lra['global_size'] = global_size
     if local_size: lra['local_size'] = local_size
+    # print(rawbufs)
+    # print([x._buf for x in rawbufs])
     et = self.clprg(*[x._buf for x in rawbufs], **lra, vals=tuple(var_vals[k] for k in self.vars), wait=wait or DEBUG>=2)
     if do_update_stats: update_stats(self.display_name, self.op_estimate, self.mem_estimate, var_vals, et, len(rawbufs), jit,
                                      lra=lra, device=self.dname, first_run=self.first_run)
