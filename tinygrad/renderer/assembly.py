@@ -97,7 +97,7 @@ def uops_to_asm(lang:AssemblyLanguage, function_name:str, uops:UOpGraph) -> str:
       if o in u.vin and u is not n:
         u.vin = tuple(n if x == o else x for x in u.vin)
     if rew := matcher.rewrite(u): replace[u] = rew
-  uops.remove_childless(set(x for x in uops if x.uop in {UOps.DEFINE_GLOBAL, UOps.PHI, UOps.ENDIF, UOps.ENDLOOP, UOps.STORE}))
+  uops.remove_childless(set(x for x in uops if x.uop in {UOps.PHI, UOps.ENDIF, UOps.ENDLOOP, UOps.STORE}))
 
   def kk(*s: str): kernel.append("\n".join(s))
 
