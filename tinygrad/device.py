@@ -223,7 +223,7 @@ class CompiledASTRunner(JITRunner):
       # TODO: this is copied from get_program
       from tinygrad.features.search import optimize_local_size
       local_size = self.local_size = optimize_local_size(self.clprg, global_size, rawbufs)
-      global_size = self.global_size = [g/l if g%l == 0 else g//l for g,l in zip(global_size, local_size)]
+      global_size = self.global_size = [g//l if g%l == 0 else g/l for g,l in zip(global_size, local_size)]
     lra = {}
     if global_size: lra['global_size'] = global_size
     if local_size: lra['local_size'] = local_size

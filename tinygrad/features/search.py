@@ -153,7 +153,7 @@ def optimize_local_size(clprg:Callable, global_size:List[int], rawbufs:List[Buff
   local_dims = [[x for x in set([sz, 1, 2, 4, 8, 16, 32, 64, 128, 256, MAX_WORKGROUP]) if x<=sz] for sz in global_size]
   local_sizes = [list(x) for x in itertools.product(*local_dims) if prod(x) <= MAX_WORKGROUP] * 2  # try each valid size twice
   def try_exec(local_size):
-    try: return clprg(*[x._buf for x in test_rawbuffers], global_size=[g/l if g%l == 0 else g//l for g,l in zip(global_size, local_size)], local_size=local_size, wait=True)  # noqa: E501
+    try: return clprg(*[x._buf for x in test_rawbuffers], global_size=[g//l if g%l == 0 else g/l for g,l in zip(global_size, local_size)], local_size=local_size, wait=True)  # noqa: E501
     except Exception: return float('inf')
   ret = min([(try_exec(local_size), local_size) for local_size in random.sample(local_sizes, len(local_sizes))])
   assert not math.isinf(ret[0]), "all optimize_local_size exec failed"
