@@ -110,10 +110,9 @@ class CUDAProgram:
 
   def __call__(self, *args, global_size:Tuple[int,int,int]=(1,1,1), local_size:Tuple[int,int,int]=(1,1,1), vals:Tuple[int, ...]=(), wait=False):
     # TODO MAYBE HERE?!
+    global_size = tuple(i+1 for i in global_size)
     if CUDACPU:
       self.vargs = args+tuple(vals)
-      print(self.prg)
-      print(self.vargs)
     else:
       check(cuda.cuCtxSetCurrent(self.device.context))
       if not hasattr(self, "vargs"):
