@@ -192,10 +192,12 @@ class Linearizer(Kernel):
 
     # add global buffers
     for i,buf in enumerate(self.bufs):
+      print(i)
       if isinstance(buf, MemBuffer):
         self.buf_uops[i] = self.uops.add(UOps.DEFINE_GLOBAL,
                                          buf.dtype if isinstance(buf.dtype, ImageDType) else PtrDType(buf.dtype), (),
                                          (buf.idx, f"data{buf.idx}", any(buf.idx == x.idx for x in self.outbufs)))
+      print(self.buf_uops)
     # add var vals
     for i,var in enumerate(self.vars):
       assert var.expr is not None
@@ -393,7 +395,17 @@ class Linearizer(Kernel):
       self.global_store(op.arg.idx, global_idxs+local_idxs+fake_reduce_idxs+upcast_idxs, val)
 
     # optimize the uops
-    self.uops.uoptimize()
+    childless_globals = self.uops.uoptimize()
+
+    print(f"{self.bufs=}")
+    self.bufs = [b for b in self.bufs for g in childless_globals if not isinstance(b, MemBuffer) or b.idx != g.arg[0]]
+    print(f"{self.bufs=}")
+
+    # print(f"{self.outbufs=}")
+    # print(f"{self.vars=}")
+    # print(f"{self.earlybufs=}")
+    # print(f"{self.full_buf_index=}")
+    # print(f"{self.bufs=}")
 
     # maybe graph the uops
     if DEBUG >= 5: self.uops.print()
@@ -404,6 +416,7 @@ class Linearizer(Kernel):
 
     # set cache and return
     self.applied_opts_cache = self.applied_opts[:]
+    for k,v in loaded_buffers.items(): print(k, v)
     return self
 
   def ast_parse(self, x:LazyOp, acc: List[UOp], offs:Optional[List[int]], loaded_buffers:Dict[Union[MemBuffer, ConstBuffer, LocalBuffer], List[UOp]], do_reduce=False, loop_ctx=tuple(), cache=None) -> List[UOp]:  # noqa: E501
@@ -428,6 +441,7 @@ class Linearizer(Kernel):
         if input_acc[off] != acc[off]:
           acc[off] = self.uops.add(UOps.PHI, input_acc[off].dtype, (input_acc[off], acc[off]) + tuple(loop_ctx))
     else:
-      ret = [self.uops.add(UOps.ALU, dtypes.bool if x.op in {BinaryOps.CMPLT, BinaryOps.CMPEQ} else val[-1].dtype, val, x.op) for val in zip(*values)]
+      # print(values)
+      ret = [self.uops.add(UOps.ALU, dtypes.bool if x.op in (BinaryOps.CMPLT, BinaryOps.CMPEQ) else val[-1].dtype, val, x.op) for val in zip(*values)]
     cache[x] = ret
     return ret

@@ -3,7 +3,7 @@ import functools, math, operator, itertools, ctypes
 from typing import List, Set, Optional, Tuple, Any, Dict, DefaultDict, Callable, cast
 from collections import defaultdict
 from tinygrad.helpers import DEBUG, flatten, prod
-from tinygrad.dtype import dtypes, DType
+from tinygrad.dtype import dtypes, DType, PtrDType
 from tinygrad.ops import UnaryOps, BinaryOps, TernaryOps
 from tinygrad.shape.symbolic import sint, Variable, Node, NumNode, MulNode, DivNode, SumNode
 from enum import Enum, auto
@@ -151,10 +151,7 @@ class UOpGraph:
   def add(self, uop:UOps, dtype:Optional[DType]=None, vin:Tuple[UOp, ...]=tuple(), arg:Any=None, cachable=True, insert_before=None,
           simplify=True) -> UOp:
     ret = UOp(uop, dtype, vin, arg) if uop is not UOps.CONST else UOp.const(dtype, arg)
-    print(":FUCK")
-    print(f"{ret=}")
     if simplify and (rewritten:=constant_folder.rewrite(ret)) is not None:
-      print(f"{rewritten=}")
       if rewritten in self.uops: return rewritten  # ignore cachable
       ret = rewritten
     key = (ret.uop, ret.dtype, ret.vin, ret.arg)
@@ -166,6 +163,7 @@ class UOpGraph:
     return ret
 
   def remove_childless(self, keep:Set[UOp]):
+    childless_globals: Set[UOp] = set()
     while 1:
       has_child: Set[UOp] = set()
       for ru in self.uops:
@@ -174,8 +172,11 @@ class UOpGraph:
       nu: List[UOp] = [x for x in self.uops if x in has_child or x in keep]
       if len(nu) == len(self.uops): break
       if DEBUG >= 4: print(f"reduced UOp count from {len(self.uops)} to {len(nu)}")
+      childless_globals = childless_globals.union({u for u in set(self.uops).difference(set(nu)) \
+                                                   if u.uop is UOps.DEFINE_GLOBAL and isinstance(u.dtype, PtrDType)})
       self.uops = nu
     self.saved_exprs = {k:v for k,v in self.saved_exprs.items() if v in nu}
+    return childless_globals
 
   # optional
   def type_verify(self):
@@ -360,7 +361,7 @@ class UOpGraph:
     self.simplify_phi_loops(get_recursive_parents)
 
     # (recursively) remove childless uops
-    self.remove_childless(set(x for x in self.uops if x.uop in {UOps.STORE}))
+    childless_globals = self.remove_childless(set(x for x in self.uops if x.uop in {UOps.STORE}))
 
     # store float4 upcasts directly if possible
     self.fix_to_store_directly()
@@ -370,6 +371,9 @@ class UOpGraph:
 
     # verify the uop types
     self.type_verify()
+
+    # return childless globals to invalidate the buffer
+    return childless_globals
 
   def flops_mem(self) -> Tuple[sint, sint]:
     flops: sint = 0

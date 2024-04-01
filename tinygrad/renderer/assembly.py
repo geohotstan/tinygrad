@@ -214,7 +214,6 @@ def uops_to_asm(lang:AssemblyLanguage, function_name:str, uops:UOpGraph) -> str:
         assert len(bufs) == args[0], f"missed a global buffer {len(bufs)} {args}"
         bufs.append((args[1], dtype))
         r[u] = f"%{args[1]}"
-        while len(bufs) < args[0]: bufs.append((f"fake_{len(bufs)}", PtrDType(dtypes.float)))
         if lang.load_global:
           dt = dtypes.ulong if dtype.__class__ == PtrDType else dtype
           kk(*lang.render_load(args[1], ssa(u, 'dat', dtype=lang.types[dt]), dt, ss=".param"))
