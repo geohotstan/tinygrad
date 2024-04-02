@@ -1,10 +1,17 @@
 import functools, io, math
 from typing import Union, Tuple, Optional, List, Any
 from tinygrad import Tensor, dtypes
-from tinygrad.dtype import ImageDType
 from tinygrad.helpers import prod, flatten
 from extra.onnx import safe_numpy, DTYPE_MAP
 import numpy as np
+
+def half_to_float_to_half(func):
+  def wrapper(*args, **kwargs):
+    ret = func(*(arg.float() if isinstance(arg, Tensor) else arg for arg in args), **kwargs)
+    if not isinstance(ret, tuple): ret = (ret,)
+    return tuple(r.cast(dtypes.float16) if isinstance(r, Tensor) else r for r in ret)
+  return wrapper
+
 
 tensor_methods = {"Neg", "Reciprocal", "Pow", "Sqrt", "Sign", "Abs", "Exp", "Log", "Mish", "Sin", "Cos", "Tan", "Relu", "Sigmoid", "MatMul",
                   "Floor", "Ceil", "Softplus", "HardSwish", "Where", "Mul", "Sinh", "Cosh", "Tanh", "Softsign", "Asinh", "Acosh", "Atanh",
@@ -13,8 +20,7 @@ tensor_methods = {"Neg", "Reciprocal", "Pow", "Sqrt", "Sign", "Abs", "Exp", "Log
 # **************** Free Ops ****************
 
 def Identity(x: Tensor): return x
-# TODO: fix buffer_parse
-def Add(x: Tensor, other: Tensor, broadcast=None, axis=None): return x + other if x.dtype == dtypes.float or isinstance(x.dtype, ImageDType) else (x + other).cast(x.dtype)
+def Add(x: Tensor, other: Tensor, broadcast=None, axis=None): return x + other
 def Sub(x: Union[Tensor, Any], other: Tensor): return x - other # some test has input as int
 def Less(x:Tensor,y:Tensor): return x < y
 def LessOrEqual(x:Tensor,y:Tensor): return x <= y
@@ -601,15 +607,18 @@ def AffineGrid(theta: Tensor, size: Tensor, align_corners=0):
 
 # **************** com.microsoft Ops ****************
 
+@half_to_float_to_half
 def SkipLayerNormalization(x:Tensor, skip:Tensor, gamma, beta:Optional[Tensor]=None, bias:Optional[Tensor]=None, epsilon=None):
   if epsilon is None: epsilon=1e-12
   x = x + skip + bias
   return x.layernorm(eps=epsilon) * gamma + beta, None, None, x
 
+@half_to_float_to_half
 def FastGelu(x:Tensor, bias:Optional[Tensor]=None):
   x = x + bias
   return 0.5 * x * (1 + (x * 0.797885 + 0.035677 * x ** 3).tanh())
 
+@half_to_float_to_half
 def EmbedLayerNormalization(input_ids: Tensor, segment_ids:Optional[Tensor]=None, word_embedding:Tensor=None, position_embedding:Tensor=None, segment_embedding:Optional[Tensor]=None, gamma=None, beta=None, mask:Optional[Tensor]=None, position_ids:Optional[Tensor]=None, epsilon=None, mask_index_type=None):
   # https://github.com/microsoft/onnxruntime/blob/main/docs/ContribOperators.md#com.microsoft.EmbedLayerNormalization
   assert (segment_ids is None) is (segment_embedding is None)
