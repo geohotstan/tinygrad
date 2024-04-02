@@ -92,7 +92,6 @@ jobs:
     defaults:
       run:
         shell: bash -o pipefail {0}
-    if: github.repository_owner == 'tinygrad'
     env:
       PYTHONPATH: .
     steps:
