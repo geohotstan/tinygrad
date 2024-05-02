@@ -6,7 +6,9 @@ from tinygrad.nn.state import get_parameters
 from tinygrad.tensor import Tensor
 from tinygrad.nn import BatchNorm2d, optim
 from tinygrad.helpers import getenv
-from extra.datasets import fetch_mnist
+from tinygrad.nn.datasets import mnist
+from tinygrad.dtype import dtypes
+# from extra.datasets import fetch_mnist
 from extra.augment import augment_img
 from extra.training import train, evaluate
 GPU = getenv("GPU")
@@ -103,9 +105,9 @@ if __name__ == "__main__":
 
   lmbd = 0.00025
   lossfn = lambda out,y: out.sparse_categorical_crossentropy(y) + lmbd*(model.weight1.abs() + model.weight2.abs()).sum()
-  X_train, Y_train, X_test, Y_test = fetch_mnist()
-  X_train = X_train.reshape(-1, 28, 28).astype(np.uint8)
-  X_test = X_test.reshape(-1, 28, 28).astype(np.uint8)
+  X_train, Y_train, X_test, Y_test = mnist()
+  X_train = X_train.cast(dtypes.uint8)
+  X_test = X_test.cast(dtypes.uint8)
   steps = len(X_train)//BS
   np.random.seed(1337)
   if QUICK:
@@ -122,6 +124,7 @@ if __name__ == "__main__":
     except:
       print('could not load weights "'+sys.argv[1]+'".')
 
+  # TODO: does this gpu work?
   if GPU:
     params = get_parameters(model)
     [x.gpu_() for x in params]

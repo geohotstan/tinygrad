@@ -2,12 +2,13 @@
 import numpy as np
 from PIL import Image
 
+from tinygrad import Tensor, dtypes
 from tinygrad.nn.state import get_parameters
 from tinygrad.nn import optim
+from tinygrad.nn.datasets import mnist
 from tinygrad.helpers import getenv
 from extra.training import train, evaluate
 from extra.models.resnet import ResNet
-from extra.datasets import fetch_mnist
 
 
 class ComposeTransforms:
@@ -20,9 +21,9 @@ class ComposeTransforms:
     return x
 
 if __name__ == "__main__":
-  X_train, Y_train, X_test, Y_test = fetch_mnist()
-  X_train = X_train.reshape(-1, 28, 28).astype(np.uint8)
-  X_test = X_test.reshape(-1, 28, 28).astype(np.uint8)
+  X_train, Y_train, X_test, Y_test = mnist()
+  X_train = X_train.reshape(-1, 28, 28).cast(dtypes.uint8)
+  X_test = X_test.reshape(-1, 28, 28).cast(dtypes.uint8)
   classes = 10
 
   TRANSFER = getenv('TRANSFER')
@@ -32,10 +33,14 @@ if __name__ == "__main__":
 
   lr = 5e-3
   transform = ComposeTransforms([
+    # NOTE: numpy to apply Image transformation. Image.fromarray() requires obj to support array interface
+    lambda x: [xx.numpy() for xx in x],
     lambda x: [Image.fromarray(xx, mode='L').resize((64, 64)) for xx in x],
-    lambda x: np.stack([np.asarray(xx) for xx in x], 0),
+    # change back to Tensor
+    lambda x: [Tensor(np.asarray(xx)) for xx in x],
+    lambda x: Tensor.stack(x, dim=0),
     lambda x: x / 255.0,
-    lambda x: np.tile(np.expand_dims(x, 1), (1, 3, 1, 1)).astype(np.float32),
+    lambda x: x.reshape(-1, 1).repeat([1,3,1,1]).cast(dtypes.float32)
   ])
   for _ in range(5):
     optimizer = optim.SGD(get_parameters(model), lr=lr, momentum=0.9)

@@ -160,7 +160,7 @@ There are a couple of dataset loaders in tinygrad located in [/extra/datasets](/
 We will be using the MNIST dataset loader.
 
 ```python
-from extra.datasets import fetch_mnist
+from tinygrad.nn.datasets import mnist()
 ```
 
 Now we have everything we need to start training our neural network.
@@ -170,15 +170,17 @@ We use `with Tensor.train()` set the internal flag `Tensor.training` to `True` d
 Upon exit, the flag is restored to its previous value by the context manager.
 
 ```python
-X_train, Y_train, X_test, Y_test = fetch_mnist()
+X_train, Y_train, X_test, Y_test = mnist()
+X_train, X_test = X_train.reshape(-1, 28*28), X_test.reshape(-1, 28*28)
 
 with Tensor.train():
   for step in range(1000):
     # random sample a batch
-    samp = np.random.randint(0, X_train.shape[0], size=(64))
-    batch = Tensor(X_train[samp], requires_grad=False)
+    samp = Tensor.randint(BS, low=0, high=X_train.shape[0])
+    batch = X_train[samp]
+    batch.requires_grad=False
     # get the corresponding labels
-    labels = Tensor(Y_train[samp])
+    labels = Y_train[samp]
 
     # forward pass
     out = net(batch)
