@@ -50,7 +50,7 @@ def evaluate(model, X_test, Y_test, num_classes=None, BS=128, return_predict=Fal
     for i in trange((Y_test.shape[0]-1)//BS+1, disable=CI):
       x = transform(X_test[i*BS:(i+1)*BS])
       out = model.forward(x) if hasattr(model, 'forward') else model(x)
-      # HACK: turning requires_grad off here doesn't seem right but it is needed for setitem
+      # HACK: is turning requires_grad off here right? it is needed for setitem
       out.requires_grad = False
       Y_test_preds_out[i*BS:(i+1)*BS] = out
     Y_test_preds = Tensor.argmax(Y_test_preds_out, axis=-1)
