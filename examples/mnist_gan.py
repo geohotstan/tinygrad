@@ -1,13 +1,14 @@
+# NOTE: This doesn't run in master
+# AssertionError: Tensor.training should be set in the optimizer
 from pathlib import Path
 import numpy as np
 from tqdm import trange
 import torch
 from torchvision.utils import make_grid, save_image
 from tinygrad.nn.state import get_parameters
-from tinygrad.tensor import Tensor
-from tinygrad.helpers import getenv
+from tinygrad import Tensor, dtypes
 from tinygrad.nn import optim
-from extra.datasets import fetch_mnist
+from tinygrad.nn.datasets import mnist
 
 class LinearGen:
   def __init__(self):
@@ -39,9 +40,9 @@ class LinearDisc:
     return x
 
 def make_batch(images):
-  sample = np.random.randint(0, len(images), size=(batch_size))
-  image_b = images[sample].reshape(-1, 28*28).astype(np.float32) / 127.5 - 1.0
-  return Tensor(image_b)
+  sample = Tensor.randint(batch_size, low=0, high=len(images))
+  image_b = images[sample].reshape(-1, 28*28).cast(dtypes.float32) / 127.5 - 1.0
+  return image_b
 
 def make_labels(bs, col, val=-2.0):
   y = np.zeros((bs, 2), np.float32)
@@ -72,7 +73,9 @@ def train_generator(optimizer, data_fake):
 
 if __name__ == "__main__":
   # data for training and validation
-  images_real = np.vstack(fetch_mnist()[::2])
+  X_train, Y_train, X_test, Y_test = mnist()
+  X_train, X_test = X_train.reshape(-1, 28*28), X_test.reshape(-1, 28*28)
+  images_real = X_train.cat(X_test)
   ds_noise = Tensor.randn(64, 128, requires_grad=False)
   # parameters
   epochs, batch_size, k = 300, 512, 1

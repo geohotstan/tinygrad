@@ -1,3 +1,4 @@
+# NOTE: do we still want this?
 import numpy as np
 from PIL import Image
 from pathlib import Path
