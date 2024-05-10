@@ -845,7 +845,7 @@ class Tensor:
 
   def cat(self:Tensor, *args:Tensor, dim:int=0) -> Tensor:
     dim = self._resolve_dim(dim)
-    # assert all(len(y.shape) == len(self.shape) and all(y.shape[i] == s for i,s in enumerate(self.shape) if i != dim) for y in args)
+    assert all(len(y.shape) == len(self.shape) and all(y.shape[i] == s for i,s in enumerate(self.shape) if i != dim) for y in args)
     catargs = [self, *args]
     cat_dims = [s.shape[dim] for s in catargs]
     cat_dim_cumsum = [0, *itertools.accumulate(cat_dims)]

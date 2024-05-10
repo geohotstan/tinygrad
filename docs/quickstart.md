@@ -178,7 +178,7 @@ with Tensor.train():
     # random sample a batch
     samp = Tensor.randint(BS, low=0, high=X_train.shape[0])
     batch = X_train[samp]
-    batch.requires_grad=False
+    batch.requires_grad = False
     # get the corresponding labels
     labels = Y_train[samp]
 
