@@ -1,5 +1,5 @@
+# TODO: can I delete this?
 #!/bin/bash
-# TODO: what is this testing...? Can I remove?
 from tinygrad import Tensor
 from tinygrad.nn.datasets import mnist
 

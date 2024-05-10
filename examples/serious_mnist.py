@@ -8,7 +8,6 @@ from tinygrad.nn import BatchNorm2d, optim
 from tinygrad.helpers import getenv
 from tinygrad.nn.datasets import mnist
 from tinygrad.dtype import dtypes
-# from extra.datasets import fetch_mnist
 from extra.augment import augment_img
 from extra.training import train, evaluate
 GPU = getenv("GPU")
@@ -124,7 +123,7 @@ if __name__ == "__main__":
     except:
       print('could not load weights "'+sys.argv[1]+'".')
 
-  # TODO: does this gpu work?
+  # TODO: can I delete this?
   if GPU:
     params = get_parameters(model)
     [x.gpu_() for x in params]

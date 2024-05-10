@@ -1,4 +1,4 @@
-# NOTE: do we still want this?
+# TODO: can I delete this?
 import numpy as np
 from PIL import Image
 from pathlib import Path

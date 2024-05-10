@@ -1,3 +1,4 @@
+# TODO: can I delete this?
 # NOTE: This doesn't run in master
 # AssertionError: Tensor.training should be set in the optimizer
 from pathlib import Path

@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 import pathlib, json
 from tqdm import trange
-from tinygrad.nn.datasets import mnist
 from extra.datasets import fetch_mnist
 from PIL import Image
 import numpy as np
 from multiprocessing import Pool
 
 X_train, Y_train, X_test, Y_test = fetch_mnist()
-# X_train, Y_train, X_test, Y_test = mnist()
-# X_train, Y_train, X_test, Y_test = X_train.reshape(-1, 28*28).numpy(), Y_train.numpy(), X_test.reshape(-1, 28*28).numpy(), Y_test.numpy()
 
 def act(arg):
-  # NOTE: this uses numpy because metal related multiprocessing problem
+  # NOTE: this uses numpy because metal related multiprocessing problem so it has to use fetch_mnist
   # AssertionError: can only open device METAL from parent
   (basedir, i, train) = arg
   if train:
