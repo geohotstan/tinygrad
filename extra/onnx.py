@@ -4,6 +4,7 @@ import importlib
 from functools import lru_cache
 import numpy as np
 from tinygrad import Tensor, dtypes, Device
+from tinygrad.tensor import _to_np_dtype
 from tinygrad.helpers import getenv, DEBUG, CI, OSX
 from tinygrad.dtype import ConstType
 from typing import List, Dict, Union
@@ -39,11 +40,10 @@ def is_dtype_supported(dtype, device: str = Device.DEFAULT):
 
 # src: onnx/mapping.py
 # not supported: STRING = 8 COMPLEX64 = 14, COMPLEX128 = 15
-# NOTE: 17, 18, 19, 20 are float8, 10 is half
+# NOTE: 17, 18, 19, 20 are float8
 DTYPE_MAP = {1:dtypes.float, 2:dtypes.uint8, 3:dtypes.int8, 4:dtypes.uint16, 5:dtypes.int16, 6:dtypes.int32, 7:dtypes.int64,
-              9:dtypes.bool, 10:dtypes.float, 11:dtypes.double, 12:dtypes.uint32, 13:dtypes.uint64, 16:dtypes.bfloat16,
+              9:dtypes.bool, 10:dtypes.half, 11:dtypes.double, 12:dtypes.uint32, 13:dtypes.uint64, 16:dtypes.bfloat16,
               17:dtypes.float, 18:dtypes.float, 19:dtypes.float, 20:dtypes.float}
-# TODO: fix buffer_parse to use this and fix get_weight_and_biases to only use buffer_parse
 
 onnx_ops = importlib.import_module('extra.onnx_ops')
 
@@ -76,7 +76,8 @@ def get_run_onnx(onnx_model: ModelProto):
     if dat := list(inp.float_data) or list(inp.int32_data) or list(inp.int64_data):
       return Tensor(dat, dtype=dtype, requires_grad=False).reshape(tuple(inp.dims))
     if len(inp.raw_data) > 0:
-      return Tensor(np.frombuffer(inp.raw_data, dtype=tensor_dtype_to_np_dtype(inp.data_type)).astype(dtype.np).copy(), requires_grad=False).reshape(tuple(inp.dims))
+      return Tensor(np.frombuffer(inp.raw_data, dtype=tensor_dtype_to_np_dtype(inp.data_type)).astype(_to_np_dtype(dtype)).copy(),
+                    requires_grad=False).reshape(tuple(inp.dims))
     return Tensor(None, requires_grad=False)
 
   def attribute_parse(a: AttributeProto) -> float | int | str | Tensor | tuple[float] | tuple[int]:

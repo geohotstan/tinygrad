@@ -5,9 +5,11 @@ The tinygrad framework has four pieces
 * a <b>lowering</b> engine which converts ASTs into code that can run on the accelerator.
 * an <b>execution</b> engine which can run that code.
 
+There is a good [bunch of tutorials](https://mesozoic-egg.github.io/tinygrad-notes/) by Di Zhu that go over tinygrad internals.
+
 ## Frontend
 
-Everything in [Tensor](tensor.md) is syntactic sugar around [function.py](function.md), where the forwards and backwards passes are implemented for the different mlops. There's about 25 of them, implemented using about 20 basic ops. Those basic ops go on to construct a graph of:
+Everything in [Tensor](tensor/index.md) is syntactic sugar around [function.py](function.md), where the forwards and backwards passes are implemented for the different functions. There's about 25 of them, implemented using about 20 basic ops. Those basic ops go on to construct a graph of:
 
 ::: tinygrad.lazy.LazyBuffer
     options:
@@ -19,7 +21,7 @@ The `LazyBuffer` graph specifies the compute in terms of low level tinygrad ops.
 
 The [scheduler](https://github.com/tinygrad/tinygrad/tree/master/tinygrad/engine/schedule.py) converts the graph of LazyBuffers into a list of `ScheduleItem`. One `ScheduleItem` is one kernel on the GPU, and the scheduler is responsible for breaking the large compute graph into subgraphs that can fit in a kernel. `ast` specifies what compute to run, and `bufs` specifies what buffers to run it on.
 
-::: tinygrad.ops.ScheduleItem
+::: tinygrad.engine.schedule.ScheduleItem
 
 ## Lowering
 
@@ -29,11 +31,9 @@ The code in [realize](https://github.com/tinygrad/tinygrad/tree/master/tinygrad/
 
 There's a ton of complexity hidden behind this, see the `codegen/` directory.
 
-First we lower the AST to UOps, which is a linear list of the compute to be run. This is where the BEAM search happens. The UOps can be changed by `CompilerOptions`.
+First we lower the AST to UOps, which is a linear list of the compute to be run. This is where the BEAM search happens.
 
-::: tinygrad.device.CompilerOptions
-
-Then we render the UOps into code, then we compile the code to binary.
+Then we render the UOps into code with a `Renderer`, then we compile the code to binary with a `Compiler`.
 
 ## Execution
 

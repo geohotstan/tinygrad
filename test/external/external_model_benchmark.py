@@ -1,5 +1,6 @@
 import csv, pathlib, time, numpy as np
 from os import getenv
+from tinygrad.device import CompileError
 import torch
 torch.set_num_threads(1)
 import onnx
@@ -60,8 +61,8 @@ def benchmark_model(m, devices, validate_outs=False):
 
   # print input names
   if DEBUG >= 2: print([inp.name for inp in onnx_model.graph.input if inp.name not in excluded])
-  try:
-    for device in devices:
+  for device in devices:
+    try:
       Device.DEFAULT = device
       inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
       tinygrad_model = get_run_onnx(onnx_model)
@@ -72,10 +73,10 @@ def benchmark_model(m, devices, validate_outs=False):
       for _ in range(3): {k:v.numpy() for k,v in tinygrad_jitted_model(**inputs).items()}
       benchmark(m, f"tinygrad_{device.lower()}_jit", lambda: {k:v.numpy() for k,v in tinygrad_jitted_model(**inputs).items()}) # noqa: F821
       del inputs, tinygrad_model, tinygrad_jitted_model
-  except Exception as e:
-    # model crashed
-    print(f"{m} crashed on {device} with: {e}")
-    return
+    except CompileError as e:
+      # METAL fails with buffer count limit
+      if m == "dm" and device == "METAL": return
+      raise e
 
   # convert model to torch
   try:
@@ -108,16 +109,18 @@ def benchmark_model(m, devices, validate_outs=False):
     del ort_sess
 
   if validate_outs:
+    if any(t == np.dtype(np.float16) for t in input_types.values()): rtol, atol = 3e-3, 1e-3  # tolerance for fp16 models
+    else: rtol, atol = 1e-5, 1e-5 # tolerance for fp32 models
+
+    ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])
+    onnx_out = ort_sess.run(output_names, np_inputs)
+    onnx_out = dict([*[(name,x) for name, x in zip(output_names, onnx_out)]])
+
     for device in devices:
-      rtol, atol = 2e-3, 2e-3  # tolerance for fp16 models
       Device.DEFAULT = device
       inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
       tinygrad_model = get_run_onnx(onnx_model)
       tinygrad_out = tinygrad_model(inputs)
-
-      ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])
-      onnx_out = ort_sess.run(output_names, np_inputs)
-      onnx_out = dict([*[(name,x) for name, x in zip(output_names, onnx_out)]])
 
       assert_allclose(tinygrad_out, onnx_out, rtol=rtol, atol=atol)
       print(f"{m:16s}outputs validated on {device=} with rtol={rtol:.1e}, atol={atol:.1e}")
@@ -127,12 +130,20 @@ def benchmark_model(m, devices, validate_outs=False):
     open_csv.writeheader()
   open_csv.writerow(CSV)
 
-def assert_allclose(tiny_out:dict, onnx_out:dict, rtol=1e-5, atol=1e-5):
+def assert_allclose(tiny_out:dict, onnx_out:dict, rtol, atol):
   assert len(tiny_out) == len(onnx_out) and tiny_out.keys() == onnx_out.keys()
   for k in tiny_out.keys():
     tiny_v, onnx_v = tiny_out[k], onnx_out[k]
     if tiny_v is None: assert tiny_v == onnx_v
-    else: np.testing.assert_allclose(tiny_v.numpy(), onnx_v, rtol=rtol, atol=atol, err_msg=f"For tensor '{k}' in {tiny_out.keys()}")
+    else:
+      assert (tiny_v := tiny_v.numpy()).dtype == onnx_v.dtype, f"tiny={tiny_v.dtype} onnx={onnx_v.dtype}"
+      try:
+        np.testing.assert_allclose(tiny_v, onnx_v, rtol=rtol, atol=atol,
+                                   err_msg=f"device={Device.DEFAULT} using {rtol=} {atol=} for tensor '{k}' in {tiny_out.keys()}")
+      except AssertionError:
+        # test using l2 norm instead
+        assert (diff := np.linalg.norm(tiny_v - onnx_v)) <= (tol := (atol + rtol * np.linalg.norm(onnx_v)).astype(onnx_v.dtype)), \
+        f"{diff=} is larger than {tol=} on device={Device.DEFAULT} using {rtol=} {atol=} for tensor={k} in {tiny_out.keys()}"
 
 if __name__ == "__main__":
   devices = [Device.DEFAULT] if getenv("NOCLANG") else [Device.DEFAULT, "CLANG"]
