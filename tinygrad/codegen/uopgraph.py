@@ -7,7 +7,7 @@ from tinygrad.ops import UnaryOps, BinaryOps, exec_alu
 from tinygrad.helpers import DEBUG, getenv, flatten, dedup, TRANSCENDENTAL, prod, CI, all_same, partition
 from tinygrad.codegen.uops import UOp, NOp, UOps, UPat, PatternMatcher, END_FOR_UOP, type_verify, print_uops
 from tinygrad.codegen.transcendental import xexp2, xlog2, xsin, TRANSCENDENTAL_SUPPORTED_DTYPES
-if TYPE_CHECKING: from tinygrad.renderer import Renderer
+from tinygrad.renderer.cstyle import Renderer, CStyleLanguage
 
 # ***** float4/image store handling *****
 
@@ -133,10 +133,9 @@ def div_folding(x:UOp, c:int) -> Optional[UOp]:
 
 # ***** transcendental *****
 
-def transcendental_folding(opt: Renderer):
+def transcendental_folding(opt: CStyleLanguage):
   return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v))
-                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin))
-                         if k not in opt.code_for_op or TRANSCENDENTAL >= 1])
+                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin)) if k not in opt.code_for_op])
 
 # ***** threefry *****
 
@@ -503,7 +502,8 @@ class UOpGraph:
     # used by linearizer
     self._uops: Optional[List[UOp]] = None
     self.opts = opts
-    self.folder = constant_folder + transcendental_folding(opts)
+    self.folder = constant_folder
+    if isinstance(opts, CStyleLanguage): self.folder + transcendental_folding(opts)
 
   def __reduce__(self): return self.__class__, (self.sink, self.opts)
   def __iter__(self) -> Iterator[UOp]: return iter(self.uops)
