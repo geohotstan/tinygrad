@@ -135,7 +135,8 @@ def div_folding(x:UOp, c:int) -> Optional[UOp]:
 
 def transcendental_folding(opt: Renderer):
   return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v))
-                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin)) if k not in opt.code_for_op])
+                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin))
+                         if k not in opt.code_for_op or TRANSCENDENTAL >= 1])
 
 # ***** threefry *****
 
