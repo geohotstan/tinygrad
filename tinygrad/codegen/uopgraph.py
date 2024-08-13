@@ -502,8 +502,7 @@ class UOpGraph:
     # used by linearizer
     self._uops: Optional[List[UOp]] = None
     self.opts = opts
-    self.folder = constant_folder
-    if isinstance(opts, CStyleLanguage): self.folder + transcendental_folding(opts)
+    self.folder = constant_folder + transcendental_folding(opts) if isinstance(opts, CStyleLanguage) else constant_folder
 
   def __reduce__(self): return self.__class__, (self.sink, self.opts)
   def __iter__(self) -> Iterator[UOp]: return iter(self.uops)
