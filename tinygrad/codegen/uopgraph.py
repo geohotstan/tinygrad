@@ -133,9 +133,9 @@ def div_folding(x:UOp, c:int) -> Optional[UOp]:
 
 # ***** transcendental *****
 
-def transcendental_folding(opt: CStyleLanguage) -> PatternMatcher:
-  return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v))
-                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin)) if k not in opt.code_for_op])
+def transcendental_folding(opt):
+  return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v)) for k,v in
+                         ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin)) if hasattr(opt, "code_for_op") and k not in opt.code_for_op])
 
 # ***** threefry *****
 
@@ -502,8 +502,7 @@ class UOpGraph:
     # used by linearizer
     self._uops: Optional[List[UOp]] = None
     self.opts = opts
-    self.folder = constant_folder
-    if TRANSCENDENTAL >= 2 or (TRANSCENDENTAL >= 1 and isinstance(opts, CStyleLanguage)): self.folder + transcendental_folding(opts)
+    self.folder = constant_folder + transcendental_folding(opts)
 
   def __reduce__(self): return self.__class__, (self.sink, self.opts)
   def __iter__(self) -> Iterator[UOp]: return iter(self.uops)
