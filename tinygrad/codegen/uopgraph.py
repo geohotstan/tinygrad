@@ -7,7 +7,7 @@ from tinygrad.ops import UnaryOps, BinaryOps, exec_alu
 from tinygrad.helpers import DEBUG, getenv, flatten, dedup, TRANSCENDENTAL, prod, CI, all_same, partition
 from tinygrad.codegen.uops import UOp, NOp, UOps, UPat, PatternMatcher, END_FOR_UOP, type_verify, print_uops
 from tinygrad.codegen.transcendental import xexp2, xlog2, xsin, TRANSCENDENTAL_SUPPORTED_DTYPES
-from tinygrad.renderer.cstyle import Renderer, CStyleLanguage
+if TYPE_CHECKING: from tinygrad.renderer import Renderer
 
 # ***** float4/image store handling *****
 
@@ -134,8 +134,9 @@ def div_folding(x:UOp, c:int) -> Optional[UOp]:
 # ***** transcendental *****
 
 def transcendental_folding(opt):
-  return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v)) for k,v in
-                         ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin)) if k not in getattr(opt, "code_for_op", {})])
+  return PatternMatcher([(UPat(UOps.ALU, dtype=TRANSCENDENTAL_SUPPORTED_DTYPES, src=(UPat(name="d"),), arg=k), cast(Callable, v))
+                         for k,v in ((UnaryOps.EXP2, xexp2), (UnaryOps.LOG2, xlog2), (UnaryOps.SIN, xsin))
+                         if k not in getattr(opt, "code_for_op", {}) and TRANSCENDENTAL < 2])
 
 # ***** threefry *****
 
