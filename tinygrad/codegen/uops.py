@@ -28,7 +28,7 @@ class UOps(Enum):
 
 END_FOR_UOP = {UOps.IF:(UOps.STORE, UOps.ENDIF), UOps.RANGE:(UOps.PHI, UOps.ENDRANGE)}
 
-@dataclass(frozen=True, eq=False)
+@dataclass(frozen=True, eq=True)
 class UOp:
   op: UOps
   dtype: Optional[DType] = None
