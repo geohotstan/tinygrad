@@ -1,10 +1,11 @@
 from __future__ import annotations
-from typing import Any, List, Optional, Set, Union, Tuple, Dict, Callable, cast, TYPE_CHECKING, TypeVar
-import math, operator, ctypes, struct, functools, hashlib
+from typing import Any, DefaultDict, List, Optional, Set, Union, Tuple, Dict, Callable, cast, TYPE_CHECKING, Sequence
+import sys, time, math, operator, ctypes, struct, functools, hashlib, itertools
+from collections import defaultdict
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from tinygrad.dtype import ConstType, ImageDType, PtrDType, dtypes, DType
-from tinygrad.helpers import pretty_print, prod
+from tinygrad.helpers import pretty_print, prod, getenv, all_same
 from tinygrad.shape.symbolic import Variable, sint
 if TYPE_CHECKING:
   from tinygrad.shape.shapetracker import ShapeTracker
