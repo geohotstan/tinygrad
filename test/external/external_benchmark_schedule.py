@@ -1,7 +1,7 @@
 from typing import List
 from extra.models.resnet import ResNet50
 from tinygrad import Tensor, Device
-from tinygrad.helpers import Profiling, Timing, getenv, BEAM, DEBUG, Context, ansilen
+from tinygrad.helpers import Profiling, Timing, getenv, BEAM, DEBUG, Context
 from tinygrad.ops import UOps
 from tinygrad.codegen.kernel import Kernel
 from tinygrad.codegen.lowerer import ast_to_uop
@@ -12,6 +12,7 @@ if __name__ == "__main__":
   mdl = ResNet50()
   img = Tensor.empty(64, 3, 224, 224)
 
+  renderer = Device[Device.DEFAULT].renderer
   PROFILE = getenv("PROFILE", 0)
   FORWARD_ONLY = getenv("FORWARD_ONLY", 0)
   SCHEDULE_ONLY = getenv("SCHEDULE_ONLY", 0)
@@ -40,17 +41,15 @@ if __name__ == "__main__":
         with Profiling(PROFILE, fn="/tmp/rewrite.prof"):
           with Timing("***** model rewrite in   "):
             rewritten_uops = []
-            for i,(k,u) in enumerate(zip(kernels, uops)):
-              with Timing(f"rewrite {i:2d} {k.name}{' '*(50-ansilen(k.name))}", enabled=getenv("VERBOSE", 0)):
-                rewritten_uops.append(full_graph_rewrite(u, k.opts))
+            for i,u in enumerate(uops):
+              with Timing(f"rewrite {i:2d} ", enabled=getenv("VERBOSE", 0)): rewritten_uops.append(full_graph_rewrite(u, k.opts))
             uops = rewritten_uops
         if getenv("LINEARIZE", 1):
-          with Timing("***** model linearize in "): uops = [linearize_uop(u) for u in uops]
+          with Timing("***** model linearize in "): uops = [linearize_uop(u, skip_check=True) for u in uops]
           print(sum(len(u) for u in uops))
           if getenv("GRAPHUOPS", 0):
             for u in uops:
               from tinygrad.engine.graph import graph_uops
               graph_uops(u)
           if getenv("SRC", 0):
-            renderer = Device[Device.DEFAULT].renderer
             for k,u in zip(kernels, uops): print(renderer.render(k.name, u))
