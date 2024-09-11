@@ -2,7 +2,7 @@ from typing import List, Tuple
 import functools, time
 from wgpu.utils.device import get_default_device
 from tinygrad.dtype import DType, PtrDType, dtypes
-from tinygrad.ops import UOp, UOps
+from tinygrad.ops import UOp, UOps, TernaryOps, BinaryOps
 from tinygrad.device import Compiled, Allocator, Compiler
 from tinygrad.renderer.cstyle import CStyleLanguage
 import wgpu
@@ -13,21 +13,37 @@ class WGSLCompiler(Compiler):
 class WGSLRenderer(CStyleLanguage):
   code_for_workitem = {"g": lambda x: f"i32(gindex.{'xyz'[int(x)]})", "l": lambda x: f"i32(lindex.{'xyz'[int(x)]})"}
   supports_float4 = False
-  type_map = {dtypes.float: "f32", dtypes.half: "f16", dtypes.int32: "i32", dtypes.uint32: "u32", dtypes.bool: "f32"}
+  type_map = {dtypes.float: "f32", dtypes.half: "f16", dtypes.int32: "i32", dtypes.uint32: "u32", dtypes.bool: "f32", dtypes.uint8: "u32",
+              dtypes.ulong: "u32"}
+  barrier: str = "workgroupBarrier();"
+  infinity: str = "inf(1.0)"
+  nan: str = "nan()"
+  code_for_op = { **CStyleLanguage().code_for_op,
+                 BinaryOps.CMPLT: lambda x,y,dtype: f"bool(f32({x})<f32({y}))",
+                 BinaryOps.CMPNE: lambda a,b,dtype: f"bool(f32({a})!=f32({b}))",
+                 TernaryOps.MULACC: lambda x,y,z,dtype: f"fma({x},{y},{z})",
+                 TernaryOps.WHERE: lambda a,b,c,dtype: f"select({c},{b},bool({a}))" }
 
   def render_cast(self, x:str, var_dtype:DType, bitcast=False) -> str:
     if self.type_map[var_dtype]: return f"bitcast<{self.type_map[var_dtype]}>({x})" if bitcast else f"{self.type_map[var_dtype]}({x})"
     raise NotImplementedError(f"no cast for {var_dtype}")
   def render_dtype(self, dtype): return "var"
   def render_kernel(self, function_name:str, kernel:List[str], bufs:List[Tuple[str,Tuple[DType,bool]]], uops:List[UOp], prefix=None) -> str:
+    # HACK
+    prekernel = [k for k in kernel if "<workgroup>" in k]
+    kernel = [k for k in kernel if "<workgroup>" not in k]
+
     local_size = [u.arg[1] for u in uops if u.op is UOps.SPECIAL and u.arg[0][0] == 'l']
     if not local_size: local_size = [1]
-    prekernel = []
     bind_it = iter(range(len(bufs)))
     prg = "fn nan() -> f32 { let bits = 0xffffffffu; return bitcast<f32>(bits); }\nfn inf(a: f32) -> f32 { return a/0.0; }\n"
+    # prg = "fn nan() -> f32 { let bits = 0xffffffffu; return bitcast<f32>(bits); }\n"
     prg += "\n".join(prekernel+[f"@group(0) @binding({next(bind_it)}) {'var<storage,read_write>' if isinstance(dtype, PtrDType) else 'var<uniform>'} {name}: {f'array<{self.type_map[dtype]}>' if isinstance(dtype, PtrDType) else 'i32'};" for name,(dtype,rw) in bufs])  # noqa: E501
     prg += f"\n@compute @workgroup_size({','.join([str(x) for x in local_size])}) fn {function_name}(@builtin(workgroup_id) gindex: vec3<u32>, @builtin(local_invocation_id) lindex: vec3<u32>) {{\n" + "\n".join(kernel) + "\n}"  # noqa: E501
     return prg
+  # def render_local(self, name:str, dtype:DType, size:int): return f"var {name}: array<{self.type_map[dtype]}, {size}>;"
+  # def render_local(self, name:str, dtype:DType, size:int): return f"var {name}: array<{self.type_map[dtype]}, {size}>;"
+  def render_local(self, name: str, dtype:DType, size: int): return f"var<workgroup> {name}: array<{self.type_map[dtype]}, {size}>;"
 
 def create_uniform(wgpu_device, val: int) -> wgpu.GPUBuffer:
   buf = wgpu_device.create_buffer(size=4, usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST)
@@ -39,7 +55,6 @@ class WebGPUProgram:
     self.device = device
     self.name, self.lib, self.prg = name, lib, self.device.create_shader_module(code=lib.decode())   # NOTE: this is the compiler
   def __call__(self, *bufs, global_size, local_size, vals=(), wait=False):
-    assert len(bufs) <= 8, "WEBGPU only supports 8 buffers"
     binding_layouts = [{"binding": i, "visibility": wgpu.ShaderStage.COMPUTE, "buffer": {"type": wgpu.BufferBindingType.uniform if i >= len(bufs) else wgpu.BufferBindingType.storage }} for i in range(len(bufs)+len(vals))]  # noqa: E501
     bindings = [{"binding": i, "resource": {"buffer": create_uniform(self.device, x) if i >= len(bufs) else x, "offset": 0, "size": 4 if i >= len(bufs) else x.size}} for i,x in enumerate(bufs+vals)]  # noqa: E501
     bind_group_layout = self.device.create_bind_group_layout(entries=binding_layouts)
