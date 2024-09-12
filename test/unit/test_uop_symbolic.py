@@ -16,7 +16,7 @@ import functools
 def render(self) -> Tuple[str, ConstType, ConstType]:
   # NOTE: we need STORE so the ALU op has children
   glbl = UOp(UOps.DEFINE_GLOBAL, PtrDType(dtypes.int), arg=0)
-  uops = linearize_uop(full_graph_rewrite(UOp(UOps.STORE, None, (glbl, UOp.const(dtypes.int, 0), self)).sink()))
+  uops = linearize_uop(full_graph_rewrite(UOp(UOps.STORE, dtypes.void, (glbl, UOp.const(dtypes.int, 0), self)).sink()))
   if DEBUG>=5: print_uops(uops)
   from tinygrad.renderer.cstyle import CStyleLanguage
   class TestRenderer(CStyleLanguage):
@@ -297,12 +297,10 @@ class TestSymbolic(unittest.TestCase):
     self.helper_test_variable(create_lt_node(Variable("a", 0, 6)*6+Variable("b", 0, 6)*6, 8), 0, 1,
                               "(((a*3)+(b*3))<4)")
 
-  @unittest.expectedFailure
   def test_lt_sum_factor_rhs_partial(self):
     self.helper_test_variable(create_lt_node(Variable("a", 0, 6)*6 + Variable("b", 0, 6)*4 + Variable("c", 0, 6)*8, 4), 0, 1,
                               "(((a*3)+(b*2)+(c*4))<2)")
 
-  @unittest.expectedFailure
   def test_lt_sum_factor_rhs_all(self):
     self.helper_test_variable(create_lt_node(Variable("a", 0, 6)*6 + Variable("b", 0, 6)*4 + Variable("c", 0, 6)*8, 2), 0, 1,
                               "(((a*3)+(b*2)+(c*4))<1)")
@@ -430,6 +428,18 @@ class TestSymbolic(unittest.TestCase):
     gidx = Variable("gidx", 0, 124)
     self.helper_test_variable(gidx%4+(gidx//4)*4, 0, 124, "gidx")
     self.helper_test_variable((gidx//4)*4+gidx%4, 0, 124, "gidx")
+
+  def test_arange_unrolled4(self):
+    gidx = Variable("gidx", 0, 2559)
+    alu0 = -gidx
+    unrolled_div = (alu0+2561)//-4+(alu0+2562)//-4+(alu0+2560)//-4+(alu0+2559)//-4+2559
+    self.helper_test_variable(unrolled_div, 0, 2559, "gidx")
+
+  def test_arange_unrolled2(self):
+    gidx = Variable("gidx", 0, 2559)
+    alu0 = -gidx
+    unrolled_div = (alu0+2559)//-2+(alu0+2560)//-2+2559
+    self.helper_test_variable(unrolled_div, 0, 2559, "gidx")
 
 @unittest.skip("not supported on uops yet")
 class TestSymbolicNumeric(unittest.TestCase):
@@ -663,6 +673,27 @@ class TestSymbolicRealWorld(unittest.TestCase):
     print(idx.render())
     # NOTE: this used to have 13,151,129,600 in the output which is out of int32 range.
     assert idx.render() == "((((1+lidx5)%16)*49)+(((1+lidx5)//16)*802816)+(gidx0*3211264)+(gidx1*784)+(gidx2*8)+(lidx4*100352)+2207744+lidx3)"
+
+class TestBounds(unittest.TestCase):
+  def test_unrolled_arange(self):
+    # #include <metal_stdlib>
+    # using namespace metal;
+    # kernel void r_2560_640_4(device int* data0, uint3 gid [[threadgroup_position_in_grid]], uint3 lid [[thread_position_in_threadgroup]]) {
+    #   int gidx0 = gid.x; /* 2560 */
+    #   int alu0 = (gidx0*(-1));
+    #   int alu1 = max((int)((-640)),((((alu0+2559)/(-4))*(-1))+(-640)));
+    #   int alu2 = max((int)((-640)),((((alu0+2560)/(-4))*(-1))+(-640)));
+    #   int alu3 = max((int)((-640)),((((alu0+2561)/(-4))*(-1))+(-640)));
+    #   int alu4 = max((int)((-640)),((((alu0+2562)/(-4))*(-1))+(-640)));
+    #   *(data0+gidx0) = ((alu1*(-1))+(alu2*(-1))+(alu4*(-1))+(alu3*(-1))+(-1));
+    # }
+    gidx0 = Variable("gidx0", 0, 2559)
+    assert gidx0.vmin == 0 and gidx0.vmax == 2559
+    alu0 = gidx0 * -1
+    assert alu0.vmin == -2559 and alu0.vmax == 0
+    assert (alu0+2559).vmin == 0 and (alu0+2559).vmax == 2559
+    assert ((alu0+2559)//-4).vmin == -639 and ((alu0+2559)//-4).vmax == 0
+    assert (((alu0+2559)//-4)*(-1)).vmin == 0 and (((alu0+2559)//-4)*(-1)).vmax == 639
 
 if __name__ == '__main__':
   unittest.main()

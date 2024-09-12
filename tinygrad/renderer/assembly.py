@@ -34,20 +34,21 @@ asm_for_op: Dict[Op, Callable] = {
 supports_half: List[Op] = [UnaryOps.EXP2, BinaryOps.ADD, BinaryOps.MUL, BinaryOps.MAX, BinaryOps.CMPLT, TernaryOps.WHERE]
 shiftable_consts = set([2**i for i in range(64)])
 ptx_matcher = PatternMatcher([
-  (UPat(UOps.ALU, BinaryOps.MUL, name="root", dtype=set([dt for dt in dtypes.fields().values() if dtypes.is_int(dt)]),
+  (UPat(UOps.ALU, arg=BinaryOps.MUL, name="root", dtype=tuple([dt for dt in dtypes.fields().values() if dtypes.is_int(dt)]),
       src=[UPat(UOps.CONST,  name="const"), UPat(name="mul")]),
     lambda root, mul, const: UOp(UOps.ALU, root.dtype,
                                  (mul, UOp.const(dtypes.int, int(math.log2(const.arg)))), BinaryOps.SHL) if const.arg in shiftable_consts else None),
-  (UPat(UOps.ALU, BinaryOps.IDIV, name="root", dtype=set([dt for dt in dtypes.fields().values() if dtypes.is_int(dt)]),
+  (UPat(UOps.ALU, arg=BinaryOps.IDIV, name="root", dtype=tuple([dt for dt in dtypes.fields().values() if dtypes.is_int(dt)]),
       src=[UPat(UOps.CONST, name="const"), UPat(name="div")]),
     lambda root, div, const: UOp(UOps.ALU, root.dtype,
                                  (div, UOp.const(dtypes.int, int(math.log2(const.arg)))), BinaryOps.SHR) if const.arg in shiftable_consts else None),
-  (UPat(UOps.ALU, BinaryOps.CMPNE, (UPat(dtype=dtypes.bool),UPat()), "root"), lambda root: UOp(root.op, root.dtype, root.src, BinaryOps.XOR)),
-  (UPat(UOps.ALU, BinaryOps.CMPLT, (UPat(name="x", dtype=dtypes.bool),UPat(name="y")), "root"),
+  (UPat(UOps.ALU, arg=BinaryOps.CMPNE, src=(UPat(dtype=dtypes.bool),UPat()), name="root"),
+   lambda root: UOp(root.op, root.dtype, root.src, BinaryOps.XOR)),
+  (UPat(UOps.ALU, arg=BinaryOps.CMPLT, src=(UPat(name="x", dtype=dtypes.bool),UPat(name="y")), name="root"),
     lambda root,x,y: UOp(root.op, root.dtype, (UOp(UOps.ALU, dtypes.bool, (x, UOp.const(dtypes.bool, True)), BinaryOps.CMPNE), y), BinaryOps.MUL)),
-  (UPat(UOps.ALU, BinaryOps.ADD, [UPat(name="non_muls"), UPat(UOps.ALU, BinaryOps.MUL, name="muls")], "root"),
+  (UPat(UOps.ALU, arg=BinaryOps.ADD, src=[UPat(name="non_muls"), UPat(UOps.ALU, arg=BinaryOps.MUL, name="muls")], name="root"),
     lambda root, muls, non_muls: UOp(UOps.ALU, root.dtype, muls.src + (non_muls,), TernaryOps.MULACC)),
-  *[(UPat(UOps.ALU, op, dtype=dtypes.half, name="x"),
+  *[(UPat(UOps.ALU, arg=op, dtype=dtypes.half, name="x"),
     lambda x: (UOp(x.op, dtypes.float32, tuple([vv.cast(dtypes.float32) for vv in x.src]), x.arg).cast(dtypes.half)))
     for op in asm_for_op.keys() if op not in supports_half],
   (UPat(UOps.ALU, name="x", dtype=dtypes.bool, arg=BinaryOps.MAX),
@@ -63,17 +64,17 @@ ptx_matcher = PatternMatcher([
   (UPat(UOps.STORE, name="root", src=(UPat(),UPat(),UPat(),UPat(name="g", dtype=dtypes.int))),
     lambda root,g: UOp(root.op, root.dtype, root.src[:3] + (g.cast(dtypes.uint8),), root.arg)),
   # ptr_ar (load/store)
-  (UPat({UOps.LOAD, UOps.STORE}, name="root", allow_any_len=True, src=(UPat({UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL}),
-                               UPat(UOps.ALU, BinaryOps.ADD, src=[UPat(name="alu"), UPat(UOps.CONST, name="const")]))),
+  (UPat((UOps.LOAD, UOps.STORE), name="root", allow_any_len=True, src=(UPat((UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL)),
+                               UPat(UOps.ALU, arg=BinaryOps.ADD, src=[UPat(name="alu"), UPat(UOps.CONST, name="const")]))),
     lambda root, alu, const: UOp(root.op, root.dtype,
       (alu.cast(dtypes.int64)*UOp.const(dtypes.int64, root.src[0].dtype.itemsize)+root.src[0].cast(dtypes.int64),
        const*root.src[0].dtype.itemsize)+root.src[2:])),
-  (UPat({UOps.LOAD, UOps.STORE}, name="root", allow_any_len=True, src=(UPat({UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL}),
+  (UPat((UOps.LOAD, UOps.STORE), name="root", allow_any_len=True, src=(UPat((UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL)),
                                                                               UPat(UOps.CONST, name="const"))),
     lambda root, const: UOp(root.op, root.dtype,
       (root.src[0].cast(dtypes.int64),
        UOp.const(dtypes.int64, const.arg*root.src[0].dtype.itemsize),)+root.src[2:])),
-  (UPat({UOps.LOAD, UOps.STORE}, name="root", allow_any_len=True, src=(UPat({UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL}),
+  (UPat((UOps.LOAD, UOps.STORE), name="root", allow_any_len=True, src=(UPat((UOps.DEFINE_LOCAL,UOps.DEFINE_GLOBAL)),
                                                                               UPat(name="alu"))),  # no const here
     lambda root, alu: UOp(root.op, root.dtype,
       (alu.cast(dtypes.int64)*UOp.const(dtypes.int64, root.src[0].dtype.itemsize)+root.src[0].cast(dtypes.int64),
@@ -154,7 +155,7 @@ class PTXRenderer(Renderer):
     r: Dict[UOp, Union[List[str], str]] = {}
     def ssa(prefix:str, u:Optional[UOp]=None, dtype:Optional[str]=None) -> str:
       nonlocal c, r
-      prefix += f"_{dtype if dtype is not None else self.types[cast(DType, cast(UOp, u).dtype)]}_"
+      prefix += f"_{dtype if dtype is not None else self.types[cast(UOp, u).dtype]}_"
       c[prefix] += 1
       if u is not None: r[u] = f"%{prefix}{c[prefix]-1}"
       return f"%{prefix}{c[prefix]-1}"
@@ -175,7 +176,6 @@ class PTXRenderer(Renderer):
     for u in uops:
       uop,dtype,src,args = u.op,u.dtype,u.src,u.arg
       if uop is UOps.IF:
-        assert src[0].dtype is not None
         kk(*self.render_bra(f"IF_{r[src[0]][1:]}_{uops.index(u)}", _cast(r[src[0]], dtypes.bool, src[0].dtype, u=u, pred=True)))
       elif uop is UOps.BARRIER and self.barrier: kk(self.barrier)
       elif uop is UOps.ENDRANGE:
@@ -185,7 +185,6 @@ class PTXRenderer(Renderer):
       elif uop is UOps.ENDIF:
         kk(f"IF_{r[src[0].src[0]][1:]}_{uops.index(src[0])}:")
       elif uop is UOps.STORE:
-        assert src[0].dtype is not None and src[2].dtype is not None
         assert src[0].dtype == dtypes.int64, "store isn't int64"
         assert src[1].op is UOps.CONST, f"store isn't const {u}"
         mem_type = '.shared' if src[0].op is UOps.DEFINE_LOCAL or any(x.op is UOps.DEFINE_LOCAL for x in src[0].parents) else '.global'
@@ -196,10 +195,8 @@ class PTXRenderer(Renderer):
           kk(*self.render_store(r[src[0]], r[src[2]], src[2].dtype,
                                 gate=r[src[3]] if len(src)>3 and src[3].op is not UOps.IF else None, ss=mem_type, offset=src[1].arg))
       else:
-        assert dtype is not None, f"None dtype for uop {uop}"
         if uop is UOps.RANGE: kk(*self.render_loop(loop:=ssa('ridx', u), r[src[0]], "LOOP_"+loop[1:]))
         elif uop is UOps.ALU:
-          assert src[0].dtype is not None
           src_dtype = src[0].dtype if args in {BinaryOps.CMPLT, BinaryOps.CMPNE} else dtype
           kk(self.code_for_op[args](ssa("alu", u), *[r[x] for x in src], src_dtype, self.types[src_dtype]))
         elif uop is UOps.DEFINE_ACC:
@@ -240,7 +237,6 @@ class PTXRenderer(Renderer):
         # NOTE: casting to str is fine because you can't vectorize a vectorize
         elif uop is UOps.VECTORIZE: r[u] = [cast(str,r[x]) for x in src]
         elif uop in {UOps.CAST, UOps.BITCAST}:
-          assert src[0].dtype is not None and dtype.count == 1
           _cast(r[src[0]], dtype, src[0].dtype, bitcast=uop is UOps.BITCAST, u=u)
         elif uop is UOps.DEFINE_LOCAL:
           # TODO: we should sum these, and fetch 0xC000 from somewhere
