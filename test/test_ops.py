@@ -35,6 +35,8 @@ def helper_test_op(shps, torch_fxn, tinygrad_fxn=None, atol=1e-6, rtol=1e-3, gra
     if PRINT_TENSORS: print(s, tinygrad_output, torch_output)
     try:
       assert tinygrad_output.shape == torch_output.shape, f"shape mismatch: tinygrad={tinygrad_output.shape} | torch={torch_output.shape}"
+      # TODO AHHHHHHH
+      # if Device.DEFAULT != "WEBGPU":
       assert tinygrad_output.dtype == torch_output.dtype, f"dtype mismatch: tinygrad={tinygrad_output.dtype} | torch={torch_output.dtype}"
       np.testing.assert_allclose(tinygrad_output, torch_output, atol=atol, rtol=rtol)
     except Exception as e:

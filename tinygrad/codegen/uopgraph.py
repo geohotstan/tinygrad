@@ -529,7 +529,6 @@ def full_graph_rewrite(sink:UOp, opts:Optional[Renderer]=None) -> UOp:
   global linearize_cnt, acc_number
   assert sink.op is UOps.SINK, f"sink isn't sink, it's {sink.op}"
   folder = constant_folder + transcendental_folding(tuple() if TRANSCENDENTAL >= 2 or opts is None else tuple(opts.code_for_op.keys()))
-  # if opts.device == "WEBGPU": folder += webgpu_folder
 
   # do graph rewrite
   acc_number = 0
@@ -544,8 +543,14 @@ def full_graph_rewrite(sink:UOp, opts:Optional[Renderer]=None) -> UOp:
     sink = graph_rewrite(sink, folder+(expander+float4_folding if opts is not None and opts.supports_float4 else expander))
     if getenv("DO_REDUCE", 1): sink = graph_rewrite(sink, folder+reducer)
 
-  # for PTX only
+  # for PTX and WEBGPU only
+  if DEBUG == 4:
+    print("===before===")
+    print(sink)
   if opts is not None and opts.extra_matcher is not None: sink = graph_rewrite(sink, folder+opts.extra_matcher)
+  if DEBUG == 4:
+    print("===after===")
+    print(sink)
   return sink
 
 def linearize_uop(sink:UOp, skip_check:bool=not __debug__) -> List[UOp]:

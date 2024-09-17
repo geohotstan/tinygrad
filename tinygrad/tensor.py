@@ -124,6 +124,11 @@ class Tensor:
     # internal variable used for autograd graph construction
     self._ctx: Optional[Function] = None
 
+    # HACK AHHHHHHHH
+    if device == "WEBGPU" and (dtype is dtypes.bool or (dtype is None and (isinstance(data, (list,tuple)) and all(isinstance(s, bool) for s in data))
+                                                        or isinstance(data, np.ndarray) and data.dtype == np.bool_)):
+      dtype = dtypes.float
+
     # create a LazyBuffer from the different types of inputs
     if isinstance(data, LazyBuffer): assert dtype is None or dtype == data.dtype, "dtype doesn't match, and casting isn't supported"
     elif isinstance(data, get_args(ConstType)): data = _metaop(MetaOps.CONST, tuple(), dtype or dtypes.from_py(data), device, data)
@@ -211,6 +216,7 @@ class Tensor:
 
   def realize(self, *lst:Tensor, do_update_stats=True) -> Tensor:
     """Triggers the computation needed to create these Tensor(s)."""
+    if self.device == "WEBGPU" and self.dtype == dtypes.bool: self = self.cast(dtypes.float).to("CLANG").cast(dtypes.bool)
     run_schedule(*self.schedule_with_vars(*lst), do_update_stats=do_update_stats)
     return self
 
@@ -252,6 +258,9 @@ class Tensor:
   def _data(self) -> memoryview:
     if 0 in self.shape: return memoryview(bytearray(0))
     # NOTE: this realizes on the object from as_buffer being a Python object
+    # if self.device == "WEBGPU" and self.dtype == dtypes.bool:
+    #   cpu = self.cast(dtypes.float.scalar()).contiguous().to("CLANG").cast(dtypes.bool).realize()
+    # else: cpu = self.cast(self.dtype.scalar()).contiguous().to("CLANG").realize()
     cpu = self.cast(self.dtype.scalar()).contiguous().to("CLANG").realize()
     buf = cast(Buffer, cast(LazyBuffer, cpu.lazydata).base.realized)
     if self.device != "CLANG": buf.options = BufferOptions(nolru=True)

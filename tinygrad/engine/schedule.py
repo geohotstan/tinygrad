@@ -192,6 +192,10 @@ def _recurse_lb(buf:LazyBuffer, realizes:Dict[LazyBuffer, None], allbufs:Dict[La
   if buf in allbufs or buf.base.realized is not None: return
   if GRAPH: log_lazybuffer(buf, scheduled)
   # check if we need to realize views
+  if DEBUG == 4:
+    print(buf)
+    print(buf.base)
+  # exit()
   if buf is not buf.base:
     # fuse some pads
     if len(buf.st.views) == 1 and buf.st.views[-1].mask is not None and all_int(buf.base.st.shape) and \

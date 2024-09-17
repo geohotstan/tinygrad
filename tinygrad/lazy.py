@@ -19,6 +19,7 @@ def create_lazybuffer(device:str, st:ShapeTracker, dtype:DTypeLike, op:Optional[
   if enable_cache and (rret := lazycache.get(cache_key, None)): return rret
 
   ret = LazyBuffer(device, st, dtype, op, arg, srcs, base=base, metadata=_METADATA.get())
+  # if device == "WEBGPU" and dtype is dtypes.bool: ret = ret.cast(dtypes.float)
   if enable_cache: lazycache[cache_key] = ret
   return ret
 
@@ -161,6 +162,8 @@ class LazyBuffer(MathTrait):
         if x.is_unrealized_unmasked_const() and (val := x.base.arg) in (1, 0): return y if val == 1 else y.const_like(0)
         if y.is_unrealized_unmasked_const() and (val := y.base.arg) in (1, 0): return x if val == 1 else x.const_like(0)
       if op is BinaryOps.IDIV and y.is_unrealized_unmasked_const() and y.base.arg == 1: return x
+
+    # if device == "WEBGPU" and dtype is dtypes.bool: ret = ret.cast(dtypes.float)
 
     return create_lazybuffer(self.device, ShapeTracker.from_shape(self.shape), out_dtype, op, arg, tuple(srcs))
 

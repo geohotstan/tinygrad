@@ -55,6 +55,9 @@ class Buffer:
     assert isinstance(dtype, DType)
     if isinstance(dtype, ImageDType): options = BufferOptions(image=dtype) # TODO: image hack shouldn't be here. where should it be?
     self.device, self.size, self.dtype, self.options, self.offset = device, size, dtype, options, offset
+    if DEBUG == 4:
+      print("BUFFER:")
+      print(self)
     if base is None:
       assert offset == 0, "base buffers can't have offset"
       self._base = None
