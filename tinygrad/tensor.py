@@ -2323,6 +2323,17 @@ class Tensor:
     ```
     """
     return F.Sigmoid.apply(self.cast(least_upper_float(self.dtype)))
+  def hardsigmoid(self, alpha:float=1/6, beta:float=0.5):
+    """
+    Applies the Hardsigmoid function element-wise.
+
+    - Described: https://paperswithcode.com/method/hard-sigmoid
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(Tensor([-3., -2., -1., 0., 1., 2., 3.]).hardsigmoid().numpy())
+    ```
+    """
+    return (alpha * self + beta).clip(0, 1)
   def sqrt(self):
     """
     Computes the square root of the tensor element-wise.
@@ -2715,6 +2726,18 @@ class Tensor:
     ```
     """
     return self / (1 + self.abs())
+
+  def selu(self, alpha=1.6732632423543772848170429916717, scale=1.0507009873554804934193349852946):
+    """
+    Applies the Selu function element-wise.
+
+    - Described: https://paperswithcode.com/method/selu
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    print(Tensor([-3., -2., -1., 0., 1., 2., 3.]).softsign().numpy())
+    ```
+    """
+    return scale * (self.relu() - (-alpha*self.exp()+alpha).relu())
 
   # ***** broadcasted elementwise ops *****
   def _broadcast_to(self, shape:Tuple[sint, ...]) -> Tensor:
