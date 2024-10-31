@@ -451,9 +451,9 @@ class TestOps(unittest.TestCase):
     helper_test_op(None, lambda x,y: x//y, forward_only=True, vals=np.array([[5, 6, 7],[1, 2, 3]], dtype=np.int32))
     helper_test_op(None, lambda x: x/2, forward_only=True, vals=np.array([[3, 4, 5]], dtype=np.int32))
     helper_test_op(None, lambda x: x//2, forward_only=True, vals=np.array([[3, 4, 5]], dtype=np.int32))
-    torch_idiv, tiny_idiv = functools.partial(torch.div, rounding_mode="trunc"), functools.partial(Tensor.div, upcast=False)
+    torch_idiv, tiny_idiv = functools.partial(torch.div, rounding_mode="trunc"), Tensor.idiv
     helper_test_op(None, torch_idiv, tiny_idiv, forward_only=True, vals=np.array([[5, -6, 7],[1, 2, 3]], dtype=np.int32))
-    x = Tensor(2**64 - 1, dtype=dtypes.uint64).div(1, upcast=False)
+    x = Tensor(2**64 - 1, dtype=dtypes.uint64).idiv(1)
     np.testing.assert_equal(x.numpy(), 2**64 - 1)
   def test_scalar_div(self):
     helper_test_op([(45,65)], lambda x: x/255)
@@ -565,13 +565,14 @@ class TestOps(unittest.TestCase):
     helper_test_op([()], lambda x: x.sin())
     # works on real CUDA but not CI
     if not (getenv("MOCKGPU") and Device.DEFAULT == "NV"):
-      helper_test_op(None, lambda x: x.sin(), vals=[[math.nan, math.inf, -math.inf]])
+      helper_test_op(None, lambda x: x.sin(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.sin(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
   def test_cos(self):
     helper_test_op([(45,65)], lambda x: x.cos())
     helper_test_op([()], lambda x: x.cos())
     if not (getenv("MOCKGPU") and Device.DEFAULT == "NV"):
+      helper_test_op(None, lambda x: x.sin(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.cos(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
   def test_tan(self):
@@ -580,6 +581,7 @@ class TestOps(unittest.TestCase):
     helper_test_op([(45,65)], lambda x: x.tan(), low=-5, high=5, forward_only=True)
     helper_test_op([()], lambda x: x.tan())
     if not (getenv("MOCKGPU") and Device.DEFAULT == "NV"):
+      helper_test_op(None, lambda x: x.sin(), vals=[[math.nan, math.inf, -math.inf, 0.0]])
       helper_test_op(None, lambda x: x.cos(), vals=[[1e1, 1e2, 1e3, 1e4, 1e5, 1e6, -1e1, -1e2, -1e3, -1e4, -1e5, -1e6]],
                     atol=3e-3, rtol=3e-3, grad_atol=3e-3, grad_rtol=3e-3)
 
@@ -644,6 +646,12 @@ class TestOps(unittest.TestCase):
   def test_softplus(self):
     helper_test_op([(45,65)], torch.nn.functional.softplus, Tensor.softplus, grad_atol=1e-6)
     helper_test_op([()], torch.nn.functional.softplus, Tensor.softplus, grad_atol=1e-6)
+
+  def test_erf(self):
+    helper_test_op([(45,65)], torch.erf, Tensor.erf)
+    helper_test_op([(45,65)], torch.erf, Tensor.erf, low=300, high=400)
+    helper_test_op([(45,65)], torch.erf, Tensor.erf, low=-400, high=-300)
+    helper_test_op([()], torch.erf, Tensor.erf)
 
   def test_gelu(self):
     helper_test_op([(45,65)], lambda x: torch.nn.functional.gelu(x, approximate="tanh"), Tensor.gelu)
@@ -866,7 +874,7 @@ class TestOps(unittest.TestCase):
                                                                          np.arange(64,128,dtype=np.float32).reshape(8,8)])
   def test_small_gemm_eye(self):
     helper_test_op(None, lambda x,y: x.matmul(y), lambda x,y: x@y, vals=[np.eye(8).astype(np.float32), np.eye(8).astype(np.float32)])
-  @unittest.skipIf(CI and Device.DEFAULT in ["NV", "LLVM", "GPU", "CUDA"], "not supported on these in CI")
+  @unittest.skipIf(CI and Device.DEFAULT in ["NV", "LLVM", "GPU", "CUDA"] or IMAGE, "not supported on these in CI/IMAGE")
   def test_gemm_fp16(self):
     helper_test_op([(64,64), (64,64)], lambda x,y: x.half().matmul(y.half()), atol=5e-3, rtol=5e-3)
   def test_gemm(self):
@@ -1259,10 +1267,73 @@ class TestOps(unittest.TestCase):
     helper_test_op([(4,4)], lambda x: x[:, 1:2][:, 0:1])
 
   def test_pad2d(self):
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)), lambda x: x.pad2d(padding=(1,2,3,4)))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4)), lambda x: x.pad2d(padding=(-1,2,-3,4)))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=5), lambda x: x.pad2d(padding=(1,2,3,4),value=5))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4), value=5), lambda x: x.pad2d(padding=(-1,2,-3,4),value=5))
+    # basic pads
+    for shp, pad in (((1,1,5,5), (0,2,3,2)), ((5,5,5), (0,2)),
+                    ((5,5,5), (1,2,3,4,1,2)), ((1,1,5,5,5), (1,2,3,4,1,2)),
+                    ((1,1,5,5), (3,11,0,30)),):
+      for val in (0.0, 5, math.inf, -math.inf):
+        with self.subTest(shp=shp, pad=pad, val=val):
+          helper_test_op([shp], lambda x: torch.nn.functional.pad(x, pad, value=val), lambda x: x.pad2d(pad, value=val))
+    # large pads
+    helper_test_op([(1,1,5,5)], lambda x: torch.nn.functional.pad(x, (3,11,0,30)), lambda x: x.pad2d((3,11,0,30)))
+    helper_test_op([(1,1,5,5)], lambda x: torch.nn.functional.pad(x, (3,11,0,30), value=5), lambda x: x.pad2d((3,11,0,30), value=5))
+    # negative pads
+    for shp, pad in (((3,3,3,3), (-1,2,2,-1)), ((1,1,5,5,5), (-1,-2,-3,4,1,-2)),
+                     ((1,1,5,5), (3,-5,0,-3)), ((1,1,5,5), (0,-5))):
+      for val in (0.0, 5, math.inf, -math.inf):
+        with self.subTest(shp=shp, pad=pad, val=val):
+          helper_test_op([shp], lambda x: torch.nn.functional.pad(x, pad, value=val), lambda x: x.pad2d(pad, value=val))
+
+    # raise error when pad is not of proper length
+    self.helper_test_exception([(3,3,3)], lambda x: torch.nn.functional.pad(x, (0,0,0,0,1,0,3,0)), lambda x: x.pad2d((0,0,0,0,1,0,3,0)),
+                               expected=(RuntimeError, AssertionError))
+    self.helper_test_exception([(3,3,3)], lambda x: torch.nn.functional.pad(x, (2,0,2)), lambda x: x.pad2d((2,0,2)),
+                               expected=(RuntimeError, ValueError))
+    # raise error for negative output size
+    self.helper_test_exception([(3,3,3)], lambda x: torch.nn.functional.pad(x, (0, -7)), lambda x: x.pad2d((0, -7)),
+                               expected=(RuntimeError, AssertionError))
+    # raise error for mode string typo
+    self.helper_test_exception([(3,3,3)], lambda x: torch.nn.functional.pad(x, (3,0), mode="typo"), lambda x: x.pad2d((3,0), mode="typo"),
+                               expected=(NotImplementedError, ValueError))
+
+  def test_pad2d_modes(self):
+    # basic pads
+    for shp, pad in (((1,1,5,5), (0,2,3,2)), ((5,5,5), (0,2)),
+                    ((1,1,5,5,5), (1,2,3,4,1,2)), ((1,1,5,5,5), (1,2,3,4,1,2))):
+      for mode in ("reflect", "replicate", "circular"):
+        with self.subTest(shp=shp, pad=pad, mode=mode):
+          helper_test_op([shp], lambda x: torch.nn.functional.pad(x, pad, mode=mode), lambda x: x.pad2d(pad, mode=mode))
+
+    # replicate large pads
+    helper_test_op([(1,1,5,5)], lambda x: torch.nn.functional.pad(x, (3,11,0,30), mode="replicate"), lambda x: x.pad2d((3,11,0,30), mode="replicate"))
+
+    # wrap around exactly once
+    helper_test_op([(1,1,5,5)], lambda x: torch.nn.functional.pad(x, (5,5,0,5), mode="circular"), lambda x:x.pad2d((5,5,0,5),mode="circular"))
+    # raise error when trying to wrap around more than once
+    self.helper_test_exception([(1,1,5,5)],
+                                lambda x: torch.nn.functional.pad(x, (3,6,0,0),mode="circular"), lambda x: x.pad2d((3,6,0,0),mode="circular"),
+                                expected=(RuntimeError, ValueError))
+    # reflect exactly once
+    helper_test_op([(1,1,5,5)], lambda x: torch.nn.functional.pad(x, (4,4,0,4), mode="reflect"), lambda x:x.pad2d((4,4,0,4),mode="reflect"))
+    # raise error for relfection padding when pad >= input size
+    self.helper_test_exception([(1,1,5,5)],
+                                lambda x: torch.nn.functional.pad(x, (3,5,0,0),mode="reflect"), lambda x: x.pad2d((3,5,0,0),mode="reflect"),
+                                expected=(RuntimeError, ValueError))
+
+  @unittest.skipIf(CI, "non-constant modes with negative pads have odd numerical errors in torch CI")
+  def test_pad2d_modes_negative_pads(self):
+    # negative pads
+    for shp, pad in (((3,3,3,3), (-1,2,2,-1)), ((1,1,5,5), (3,-3,0,-3)), ((1,1,5,5), (3,-5,1,-5)), ((1,1,5,5), (0,0,0,-5))):
+      for mode in ("reflect", "replicate", "circular"):
+        with self.subTest(shp=shp, pad=pad, mode=mode):
+          helper_test_op([shp], lambda x: torch.nn.functional.pad(x, pad, mode=mode), lambda x: x.pad2d(pad, mode=mode))
+
+    # TODO: fix backward for circular negative pads, problems occur when more-than-once wrap around happens when negative pads come before
+    # ((1,1,5,5), (3,-3,0,0)) works
+    # ((1,1,5,5), (-3,3,0,0)) fails
+    helper_test_op([(1,1,5,5)],
+                   lambda x: torch.nn.functional.pad(x, (-3,3,0,0), mode="circular"),
+                   lambda x: x.pad2d((-3,3,0,0), mode="circular"), forward_only=True)
 
   def test_pad(self):
     helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)),lambda x: x.pad(((3,4),(1,2))))
@@ -1594,16 +1665,16 @@ class TestOps(unittest.TestCase):
               lambda x,w: torch.nn.functional.conv1d(torch.nn.functional.pad(x, p),w).relu(),
               lambda x,w: Tensor.conv2d(x,w,padding=p).relu())
 
-  def _test_conv2d(self, bs=1, cin=1):
+  def _test_conv2d(self, bs=1, cin=1, cout=6):
     for H in [1,2,3]:
       for W in [1,2,3,5]:
-        for groups in [1,3] if cin == 3 and H == 3 and W == 3 else [1]:
+        for groups in [1,3] if cin == 3 and cout == 6 and H == 3 and W == 3 else [1]:
           with self.subTest(batch_size=bs, channels=cin, groups=groups, height=H, width=W):
-            helper_test_op([(bs,cin,11,7), (6,cin//groups,H,W)],
+            helper_test_op([(bs,cin,5,7), (cout,cin//groups,H,W)],
               lambda x,w: torch.nn.functional.conv2d(x,w,groups=groups).relu(),
               lambda x,w: Tensor.conv2d(x,w,groups=groups).relu(), grad_rtol=1e-5)
   def test_conv2d(self): self._test_conv2d(bs=1, cin=3)
-  def test_conv2d_bs_4_cin_3(self): self._test_conv2d(bs=4, cin=3)
+  def test_conv2d_bs_4_cin_3(self): self._test_conv2d(bs=4, cin=3, cout=2)
   def test_conv2d_bs_1_cin_1(self): self._test_conv2d(bs=1, cin=1)
   def test_conv2d_bs_4_cin_1(self): self._test_conv2d(bs=4, cin=1)
 
