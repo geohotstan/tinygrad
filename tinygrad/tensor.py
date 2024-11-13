@@ -1111,10 +1111,10 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
       indices_filtered[dim] = ((0, self.shape[dim]), 1)
 
     new_slice, strides = ((), ()) if not indices_filtered else zip(*indices_filtered)
-    # flip negative strides
+    # apply start and stop slices and flip if stride is negative
     ret = self.shrink(new_slice).flip(tuple(i for i, st in enumerate(strides) if st < 0))
-    # handle stride != 1 or -1
     if any(abs(st) != 1 for st in strides):
+      if not all_int(ret.shape): raise RuntimeError("symbolic shape not supprted")
       fixed_strides = tuple(smin(abs(st),sh) for sh,st in zip(ret.shape, strides))
       output = tuple(ceildiv(sh,st) for sh, st in zip(ret.shape, fixed_strides))
       ret = ret.repeat([1 + int(st != 1) for st in fixed_strides]).shrink([(0,o*st) for o,st in zip(output, fixed_strides)])
