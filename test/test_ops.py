@@ -1294,27 +1294,36 @@ class TestOps(unittest.TestCase):
     helper_test_op([(4,4)], lambda x: x[:, 1:2][0:1])
     helper_test_op([(4,4)], lambda x: x[:, 1:2][:, 0:1])
 
-  def test_pad2d(self):
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)), lambda x: x.pad2d(padding=(1,2,3,4)))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4)), lambda x: x.pad2d(padding=(-1,2,-3,4)))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=5), lambda x: x.pad2d(padding=(1,2,3,4),value=5))
-    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4), value=5), lambda x: x.pad2d(padding=(-1,2,-3,4),value=5))
-
   def test_pad(self):
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)), lambda x: x.pad(padding=(1,2,3,4)))
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4)), lambda x: x.pad(padding=(-1,2,-3,4)))
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=5), lambda x: x.pad(padding=(1,2,3,4),value=5))
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4), value=5), lambda x: x.pad(padding=(-1,2,-3,4),value=5))
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=math.inf), lambda x: x.pad(padding=(1,2,3,4),value=math.inf))
+    helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4), value=-math.inf),
+                                lambda x: x.pad(padding=(-1,2,-3,4),value=-math.inf))
     helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)),lambda x: x.pad(((3,4),(1,2))))
+    helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4)), lambda x: x.pad(((-3,4), (-1,2))))
     helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=5), lambda x: x.pad(((3,4), (1,2)), value=5))
-    helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=math.inf), lambda x: x.pad(((3,4), (1,2)), value=math.inf))
-    helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4), value=-math.inf), lambda x: x.pad(((3,4), (1,2)), value=-math.inf))
     helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (0,0,3,4), value=1), lambda x: x.pad(((3,4), None), value=1))
     helper_test_op([(3,3)], lambda x: torch.nn.functional.pad(x, (0,0,0,0), value=1), lambda x: x.pad((None, None), value=1))
+    # raise error for uneven pads
+    self.helper_test_exception([(3,3)], lambda x: torch.nn.functional.pad(x, (2,0,2)), lambda x: x.pad((2,0,2)),
+                               expected=(RuntimeError, ValueError))
+    # raise error for too many or too little pads
+    self.helper_test_exception([(3,3)], lambda x: torch.nn.functional.pad(x, (0,0,0,0,1,0,3,0)), lambda x: x.pad((0,0,0,0,1,0,3,0)),
+                               expected=(RuntimeError, ValueError))
+    x = Tensor.ones(3,3)
+    with self.assertRaises(ValueError): x.pad((None,(0,1),(3,0)))
+    with self.assertRaises(ValueError): x.pad(((0,1),))
 
   def test_pad_reshape(self):
     helper_test_op([(1, 2)],
                    lambda x: torch.nn.functional.pad(x, (0, 1, 1, 0)).reshape((3, 2)),
-                   lambda x: x.pad2d((0, 1, 1, 0)).reshape((3, 2)), forward_only=True)
+                   lambda x: x.pad((0, 1, 1, 0)).reshape((3, 2)), forward_only=True)
     helper_test_op([(1, 2)],
                    lambda x: torch.nn.functional.pad(x, (0, 2, 1, 1)).reshape((4, 3)),
-                   lambda x: x.pad2d((0, 2, 1, 1)).reshape((4, 3)), forward_only=True)
+                   lambda x: x.pad((0, 2, 1, 1)).reshape((4, 3)), forward_only=True)
     helper_test_op([(1, 1, 1, 2)],
                    lambda x: torch.nn.functional.pad(x, (0, 4, 2, 2, 1, 2, 0, 2)).reshape((4, 3, 6, 5)),
                    lambda x: x.pad(((0, 2), (1, 2), (2, 2), (0, 4))).reshape((4, 3, 6, 5)), forward_only=True)
@@ -1787,7 +1796,7 @@ class TestOps(unittest.TestCase):
   def test_padding_add(self):
     helper_test_op([(64,64), (60,60)],
       lambda x,w: x+torch.nn.functional.pad(w, (2,2,2,2)),
-      lambda x,w: x+w.pad2d((2,2,2,2)))
+      lambda x,w: x+w.pad((2,2,2,2)))
 
   def test_dilated_conv2d(self):
     bs = 4
@@ -2235,6 +2244,15 @@ class TestOpsUint8(unittest.TestCase):
     helper_test_op([(2,3,64,64)],
       lambda x: torch.nn.functional.interpolate((10*x).relu().type(torch.uint8), size=out_sz, mode="nearest-exact"),
       lambda x: Tensor.interpolate((10*x).relu().cast('uint8'), size=out_sz, mode="nearest-exact"), forward_only=True)
+
+  @unittest.expectedFailure
+  def test_min(self):
+    helper_test_op(None,
+      lambda x: x.type(torch.uint8).min(),
+      lambda x: x.cast(dtypes.uint8).min(), forward_only=True, vals=[[[0, 1, 2], [3, 4, 5]]])
+    helper_test_op(None,
+      lambda x: x.type(torch.uint8).min(),
+      lambda x: x.cast(dtypes.uint8).min(), forward_only=True, vals=[0, 128, 255, 64, 32, 16])
 
 if __name__ == '__main__':
   np.random.seed(1337)
