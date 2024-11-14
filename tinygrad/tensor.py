@@ -1112,16 +1112,14 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
       indices_filtered[dim] = ((0, self.shape[dim]), 1)
 
     new_slice, strides = ((), ()) if not indices_filtered else zip(*indices_filtered)
-    # flip negative strides
+    # apply start and stop slices and flip if stride is negative
     ret = self.shrink(new_slice).flip(tuple(i for i, st in enumerate(strides) if st < 0))
-    # handle stride != 1 or -1
     if any(abs(st) != 1 for st in strides):
-      strides = tuple(abs(s) for s in strides)
-      # pad shape to multiple of stride
       if not all_int(ret.shape): raise RuntimeError("symbolic shape not supprted")
-      ret = ret.pad(tuple((0, round_up(s, st) - s) for s, st in zip(ret.shape, strides)))
-      ret = ret.reshape(tuple(flatten((s // st, st) for s, st in zip(ret.shape, strides))))
-      ret = ret.shrink(tuple(flatten(((0, s), (0, 1)) for s in ret.shape[::2]))).reshape(ret.shape[::2])
+      fixed_strides = tuple(min(abs(st),sh) for sh,st in zip(ret.shape, strides))
+      output = tuple(ceildiv(sh,st) for sh, st in zip(ret.shape, fixed_strides))
+      ret = ret.repeat([1 + int(st != 1) for st in fixed_strides]).shrink(tuple((0,o*st) for o,st in zip(output, fixed_strides)))
+      ret = ret.reshape(flatten((o,st) for o,st in zip(output, fixed_strides))).shrink(flatten(((0,o),(0,1)) for o in output)).reshape(output)
 
     # inject 1 for dim where it's None and collapse dim for int
     new_shape = list(ret.shape)
