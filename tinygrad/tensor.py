@@ -1116,9 +1116,9 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     ret = self.shrink(new_slice).flip(tuple(i for i, st in enumerate(strides) if st < 0))
     if any(abs(st) != 1 for st in strides):
       if not all_int(ret.shape): raise RuntimeError("symbolic shape not supprted")
-      fixed_strides = tuple(smin(abs(st),sh) for sh,st in zip(ret.shape, strides))
+      fixed_strides = tuple(min(abs(st),sh) for sh,st in zip(ret.shape, strides))
       output = tuple(ceildiv(sh,st) for sh, st in zip(ret.shape, fixed_strides))
-      ret = ret.repeat([1 + int(st != 1) for st in fixed_strides]).shrink([(0,o*st) for o,st in zip(output, fixed_strides)])
+      ret = ret.repeat([1 + int(st != 1) for st in fixed_strides]).shrink(tuple((0,o*st) for o,st in zip(output, fixed_strides)))
       ret = ret.reshape(flatten((o,st) for o,st in zip(output, fixed_strides))).shrink(flatten(((0,o),(0,1)) for o in output)).reshape(output)
 
     # inject 1 for dim where it's None and collapse dim for int
