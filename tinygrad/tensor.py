@@ -2,7 +2,8 @@
 from __future__ import annotations
 import time, math, itertools, functools, struct, sys, inspect, pathlib, string, dataclasses, hashlib
 from contextlib import ContextDecorator
-from typing import List, Tuple, Callable, Optional, ClassVar, Type, Union, Sequence, Dict, DefaultDict, cast, get_args, Literal
+from typing import List, Tuple, Callable, Optional, ClassVar, Type, Union, Sequence, Dict, DefaultDict, cast, get_args, Literal, get_type_hints
+from typing import get_origin
 from collections import defaultdict
 
 from tinygrad.dtype import DType, DTypeLike, dtypes, ImageDType, ConstType, least_upper_float, least_upper_dtype, sum_acc_dtype, to_dtype, truncate
@@ -1353,7 +1354,7 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     dim = self._resolve_dim(dim)
     return list(self.split(ceildiv(self.shape[dim], chunks) if self.shape[dim] else [0]*chunks, dim=dim))
 
-  def meshgrid(self:Tensor, *args:Tensor, indexing:Union[Literal["ij"], Literal["xy"]]="ij") -> Tuple[Tensor, ...]:
+  def meshgrid(self:Tensor, *args:Tensor, indexing:Literal["ij", "xy"]="ij") -> Tuple[Tensor, ...]:
     """
     Generates coordinate matrices from coordinate vectors.
     Input tensors can be scalars or 1D tensors.
@@ -1373,7 +1374,6 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     print(grid_y.numpy())
     ```
     """
-    if indexing not in ("ij", "xy"): raise RuntimeError(f'indexing must be in ("ij", "xy"), got {indexing}')
     if len(tensors:=(self, *args)) == 1: return tensors
     basis = tuple(range(len(tensors))) if indexing == "ij" else (1, 0) + tuple(range(2, len(tensors)))
     tensors = tuple(t.reshape((-1,) + (1,)*(len(args) - i)) for i,t in zip(basis, tensors))
@@ -2262,7 +2262,7 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     """
     return Tensor._tri(self.shape[-2], self.shape[-1], diagonal=diagonal+1, device=self.device, dtype=dtypes.bool).where(0, self).cast(self.dtype)
 
-  def interpolate(self, size:Tuple[int, ...], mode:str="linear", align_corners:bool=False) -> Tensor:
+  def interpolate(self, size:Tuple[int, ...], mode:Literal["linear", "nearest", "nearest-exact"]="linear", align_corners:bool=False) -> Tensor:
     """
     Downsamples or Upsamples to the input `size`, accepts 0 to N batch dimensions.
 
@@ -2278,7 +2278,6 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     ```
     """
     assert isinstance(size, (tuple,list)) and all_int(size) and 0 < len(size) <= self.ndim, f"invalid {size=}"
-    assert mode in ("linear", "nearest", "nearest-exact"), "only supports linear, nearest or nearest-exact interpolate"
     assert not (align_corners and mode != "linear"), "align_corners option can only be set with the interpolating mode linear"
     x, expand = self, list(self.shape)
     for i in range(-1,-len(size)-1,-1):
@@ -3295,7 +3294,6 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     return ((qk+attn_mask) if attn_mask is not None else qk).softmax(-1).cast(self.dtype).dropout(dropout_p) @ value
 
   def _do_reduction(self, reduction:ReductionStr="mean") -> Tensor:
-    if reduction not in get_args(ReductionStr): raise ValueError(f"{reduction=} must be one of {get_args(ReductionStr)}")
     reductions: Dict[str, Callable[[Tensor], Tensor]] = {"mean": Tensor.mean, "sum": Tensor.sum, "none": lambda x: x}
     return reductions[reduction](self)
 
@@ -3343,7 +3341,6 @@ class Tensor(SimpleMathTrait):  # pylint: disable=abstract-method
     ```
     """
     assert 0.0 <= label_smoothing <= 1.0, "label_smoothing must be in [0.0, 1.0]"
-    assert reduction in ("mean", "sum", "none"), "reduction must be one of ['mean', 'sum', 'none']"
     log_probs, loss_mask = self.log_softmax(), (Y != ignore_index) if ignore_index != -1 else Y.ones_like(dtype=dtypes.bool)
     y_counter = Tensor.arange(self.shape[-1], requires_grad=False, device=self.device).unsqueeze(0).expand(Y.numel(), self.shape[-1])
     y = ((y_counter == Y.flatten().reshape(-1, 1)) * loss_mask.reshape(-1, 1)).reshape(*Y.shape, self.shape[-1])
@@ -3691,7 +3688,19 @@ def _metadata_wrapper(fn):
     return ret
   return _wrapper
 
-if TRACEMETA >= 1:
-  for name, fn in inspect.getmembers(Tensor, inspect.isfunction):
-    if name in ["__class__", "__init__", "__new__", "__repr__", "backward", "sequential"]: continue
-    setattr(Tensor, name, functools.wraps(fn)(_metadata_wrapper(fn)))
+def _tensor_typechecker_wrapper(fn):
+  def _wrapper(*args, **kwargs):
+    # only validate Literal args for demo
+    kwarg_types, kwarguments = get_type_hints(fn), inspect.signature(fn).bind(*args, **kwargs).arguments
+    for name, value in kwarguments.items():
+      if name not in kwarg_types or name == "self": continue
+      if get_origin(kwarg_type := kwarg_types[name]) is Literal and value not in (expected := get_args(kwarg_type)):
+        raise ValueError(f"{name} must be in {expected}, got {value}")
+    return fn(*args, **kwargs)
+  return _wrapper
+
+for name, fn in inspect.getmembers(Tensor, inspect.isfunction):
+  if name in ["__class__", "__init__", "__new__", "__repr__", "backward", "sequential"]: continue
+  if TRACEMETA >= 1: fn = functools.wraps(fn)(_metadata_wrapper(fn))
+  if name not in ["_from_np_dtype", "_to_np_dtype", "_fromnp", "numpy"]: fn = functools.wraps(fn)(_tensor_typechecker_wrapper(fn))
+  setattr(Tensor, name, fn)
