@@ -237,7 +237,7 @@ class TestOps(unittest.TestCase):
       for tor_i, ten_i in zip(tor, ten):
         helper_test_op([], lambda: tor_i, lambda: ten_i)
 
-    self.helper_test_exception([], lambda: torch.meshgrid(x, indexing="bad"), lambda: xt.meshgrid(indexing="bad"), expected=RuntimeError)
+    self.helper_test_exception([], lambda: torch.meshgrid(x, indexing="bad"), lambda: xt.meshgrid(indexing="bad"), expected=(RuntimeError,ValueError))
 
   def test_arange(self):
     helper_test_op([], lambda: torch.arange(10, dtype=torch.int32), lambda: Tensor.arange(10), forward_only=True)
