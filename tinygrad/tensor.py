@@ -3696,10 +3696,11 @@ def _tensor_typechecker_wrapper(fn):
       if name not in kwarg_types or name == "self": continue
       if get_origin(kwarg_type := kwarg_types[name]) is Literal and value not in (expected := get_args(kwarg_type)):
         raise ValueError(f"{name} must be in {expected}, got {value}")
-    return fn(*args, **kwargs) # asdf
+    return fn(*args, **kwargs)
   return _wrapper
 
 for name, fn in inspect.getmembers(Tensor, inspect.isfunction):
   if name in ["__class__", "__init__", "__new__", "__repr__", "backward", "sequential"]: continue
-  if TRACEMETA >= 1: setattr(Tensor, name, functools.wraps(fn)(_metadata_wrapper(fn)))
-  if name not in ["_from_np_dtype", "_to_np_dtype", "_fromnp", "numpy"]: setattr(Tensor, name, functools.wraps(fn)(_tensor_typechecker_wrapper(fn)))
+  if TRACEMETA >= 1: fn = functools.wraps(fn)(_metadata_wrapper(fn))
+  if name not in ["_from_np_dtype", "_to_np_dtype", "_fromnp", "numpy"]: fn = functools.wraps(fn)(_tensor_typechecker_wrapper(fn))
+  setattr(Tensor, name, fn)
