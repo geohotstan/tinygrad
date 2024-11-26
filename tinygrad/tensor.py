@@ -2351,12 +2351,8 @@ class Tensor(SimpleMathTrait):
       f"All dimensions of {index.shape=} should be <= to all dimensions of {src.shape=} and all dimensions except dimension {dim} of {self.shape=}"
     mask = (index.unsqueeze(-1) == Tensor.arange(self.shape[dim], requires_grad=False, device=self.device)).transpose(-1, dim)
     src = src.unsqueeze(-1).expand((None,)*src.ndim + (self.shape[dim],)).transpose(-1, dim).shrink(tuple((0,s) for s in mask.shape))
-    src, mask = (x.pad(tuple((0, self.shape[i] - x.shape[i]) if i != dim else None for i in range(self.ndim)) + (None,),
-                       value=False) for x in (src, mask))
-    # print(index.numpy())
-    # print(mask.numpy())
-    # print(mask.where(mask*src, 1).numpy())
-    if reduce == "add": return (mask*src).sum(-1) + self
+    src, mask = (x.pad(tuple((0, self.shape[i] - x.shape[i]) if i != dim else None for i in range(self.ndim)) + (None,)) for x in (src, mask))
+    if reduce == "add": return mask.where(src, 0).sum(-1) + self
     if reduce == "multiply": return mask.where(src, 1).prod(-1) * self
     return _masked_setitem(self, src, mask, (-1,))
 
