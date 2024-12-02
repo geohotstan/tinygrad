@@ -2007,6 +2007,7 @@ class Tensor(SimpleMathTrait):
     (d_,s_,p_), i_ = (make_tuple(x, len(k_)) for x in (d_,s_,p_)), self.shape[-len(k_):]
     # https://arxiv.org/pdf/1603.07285 section 5.1, relationship 15.
     o_ = [ceildiv(i+2*p - (d*(k-1)+1), s) + 1 for i,d,k,s,p in zip(i_,d_,k_,s_,p_)]
+    print(o_)
     pads = list(self._padding2d(p_, len(k_)))
     # we have to do additional padding before `_pool` so that `o_` in `_pool` is calculated correctly
     # `s*(o-1) + (d*(k-1)+1) - (i+2*p)` -> last_sliding_window_start + full_kernel_size - padded_input_shape
@@ -2040,6 +2041,8 @@ class Tensor(SimpleMathTrait):
     if not ceil_mode: return pool(self, real_pads).mean(axis=axis) if count_include_pad else \
                              pool(self, real_pads).sum(axis=axis) / pool(self.ones_like(), real_pads).sum(axis=axis)
     ceil_pads = self._ceil_mode_padding2d(k_, stride if stride is not None else k_, dilation, padding)
+    print(ceil_pads)
+    print(tuple(cp-rp for cp,rp in zip(ceil_pads, real_pads)))
     return pool(self, ceil_pads).sum(axis) / pool(self.pad(real_pads).ones_like(), tuple(cp-rp for cp,rp in zip(ceil_pads, real_pads))).sum(axis) \
            if count_include_pad else pool(self, ceil_pads).sum(axis=axis) / pool(self.ones_like(), ceil_pads).sum(axis=axis)
 
