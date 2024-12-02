@@ -2,12 +2,12 @@ import functools, io, math
 from typing import Union, Tuple, Optional, List, Any, Literal, cast
 from tinygrad.tensor import Tensor, _broadcast_shape
 from tinygrad.dtype import ImageDType, dtypes
-from tinygrad.helpers import prod, flatten
+from tinygrad.helpers import prod, flatten, make_tuple
 from extra.onnx import DTYPE_MAP, to_python_const
 import numpy as np
 
 tensor_methods = {"Neg", "Reciprocal", "Pow", "Sqrt", "Sign", "Abs", "Exp", "Log", "Mish", "Sin", "Cos", "Tan", "Asin", "Acos", "Atan","Relu",
-                  "Sigmoid", "MatMul", "Floor", "Ceil", "IsInf", "IsNan", "Softplus", "HardSwish", "Where", "Mul", "Sinh", "Cosh", "Tanh", "Softsign",
+                  "Sigmoid", "MatMul", "Floor", "Ceil", "IsInf", "IsNaN", "Softplus", "HardSwish", "Where", "Mul", "Sinh", "Cosh", "Tanh", "Softsign",
                   "Asinh", "Acosh", "Atanh",  "Elu", "Celu", "Xor", "Round", "Erf"}
 
 # **************** Free Ops ****************
@@ -184,34 +184,32 @@ def Pad(x: Tensor, pads: Union[Tensor, Tuple[int, ...]], constant_value: Optiona
   for i,axis in enumerate(axes): real_pads[axis%x.ndim], real_pads[axis%x.ndim+x.ndim] = pads[i], pads[i+len(axes)]
   return x.pad(padding=_onnx_pads_to_tiny_pads(to_python_const(real_pads)), mode={"edge":"replicate", "wrap":"circular"}.get(mode, mode), value=value)
 
+def resolve_pool_pads(x, p_, k_, d_, s_, auto_pad):
+  i_,(s_,d_,p_) = x.shape[-len(k_):], (make_tuple(x, len(k_)*2) for x in (s_, d_, p_))
+  if auto_pad=="NOTSET": return _onnx_pads_to_tiny_pads(p_ if len(p_)==len(k_)*2 else p_*2)
+  o_ = [((i - (1 if auto_pad in ("SAME_UPPER", "SAME_LOWER") else k)) // s + 1) for i,k,s in zip(i_, k_, s_)]
+  return _onnx_pads_to_tiny_pads(_auto_pad([(o-1)*s+k-i for o,i,k,s in zip(o_, i_, k_, s_)], auto_pad))
+
 def AveragePool(X: Tensor, kernel_shape, auto_pad="NOTSET", ceil_mode=False, count_include_pad=False, dilations=1, pads=0, strides=1):
+  pads = resolve_pool_pads(X, pads, kernel_shape, dilations, strides, auto_pad)
   ret = X.pad(pads).avg_pool2d(kernel_shape, strides, dilations, ceil_mode=ceil_mode)
   return ret if count_include_pad else ret / X.ones_like().pad(pads).avg_pool2d(kernel_shape, strides, dilations, ceil_mode=ceil_mode)
 
 def MaxPool(X: Tensor, kernel_shape, auto_pad="NOTSET", ceil_mode=False, dilations=1, pads=0, storage_order=0, strides=1):
-  ret = X.pad(pads, float('-inf')).max_pool2d(kernel_shape, strides, dilations, ceil_mode=ceil_mode)
+  pads = resolve_pool_pads(X, pads, kernel_shape, dilations, strides, auto_pad)
+  ret = X.max_pool2d(kernel_shape, strides, dilations, pads, ceil_mode=ceil_mode)
   indices = ((ret.reshape(-1, 1) == X.reshape(1, -1)) * Tensor.arange(X.numel(), dtype=dtypes.int64).unsqueeze(0)).sum(1).reshape(ret.shape)
   return ret.cast(X.dtype), indices.transpose(-2, -1) if storage_order else indices
 
-def MaxUnpool(xT: Tensor, xI: Tensor, outshape: Optional[Tensor]=None, kernel_shape=None, pads=None, strides=None):
+def MaxUnpool(xT: Tensor, xI: Tensor, outshape: Optional[Tensor]=None, kernel_shape=None, pads=(0,0,0,0), strides=None):
+  outshape = to_python_const(outshape)
   out_sh = [(ks//2)*2 + st * inps for inps, st, ks in zip(xI.shape, strides, kernel_shape)]
-  outlength = prod(out_sh)
-  xI = xI.flatten().unsqueeze(1).expand(None, outlength)
-  arange = Tensor.arange(outlength, requires_grad=False).reshape(1, outlength).expand(xI.shape)
-  xT = xT.flatten().unsqueeze(1).expand(None, outlength)
-  ret = ((xI == arange) * xT).sum(0).reshape([1, 1] + out_sh)
-  if outshape is not None and (outshape := to_python_const(outshape)) != ret.shape:
-    diff = [outshape[2] - ret.shape[2], outshape[3] - ret.shape[3]]
-    pad_args = [diff[0]//2, diff[1]//2, diff[0]-diff[0]//2, diff[1]-diff[1]//2]
-    ret = ret.pad((pad_args[1], pad_args[3], pad_args[0], pad_args[2]))
-  return ret
+  ret = ((xI.reshape(-1, 1) == Tensor.arange(prod(out_sh))) * xT.reshape(-1, 1)).sum(0).reshape(1, 1, *out_sh)
+  if outshape is not None and outshape != ret.shape: pads = _auto_pad([outshape[-2] - ret.shape[-2], outshape[-1] - ret.shape[-1]], "SAME_UPPER")
+  return ret.pad(_onnx_pads_to_tiny_pads(pads))
 
 def Conv(X: Tensor, W: Tensor, B:Optional[Tensor]=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, strides=1):
-  if auto_pad != "NOTSET":
-    padding = _auto_pad(X, auto_pad, strides, kernel_shape, dilations)
-  else:
-    # reorder padding
-    padding = [p for ps in zip(pads[:len(pads)//2][::-1], pads[len(pads)//2:][::-1]) for p in ps] if pads is not None else 0
+  padding = resolve_pool_pads(X, pads, kernel_shape or W.shape[2:], dilations, strides, auto_pad)
   return X.conv2d(W, B, stride=strides, groups=group, dilation=dilations, padding=padding)
 
 def ConvTranspose(X: Tensor, W: Tensor, B:Optional[Tensor]=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, output_shape=None, output_padding=0, strides=1):
@@ -248,13 +246,10 @@ def Dropout(data: Tensor, ratio=0.5, training_mode=False, seed=None):
   return data * mask * (1/(1.0 - ratio)), mask
 
 def LRN(x: Tensor, size, alpha=1e-4, beta=0.75, bias=1.0):
-  bs, c, iy, ix = x.shape
-  return x / x.mul(x).reshape(bs,1,c,iy*ix).pad((0,0,(size-1)//2, size//2)).avg_pool2d((size, 1), 1).reshape(bs,c,iy,ix).mul(alpha).add(bias).pow(beta)
+  pooled_x = (x**2).rearrange('b c h w -> b 1 c (h w)').pad2d((0,0,(size-1)//2, size//2)).avg_pool2d((size, 1), 1)
+  return x / (pooled_x.reshape(x.shape) * alpha + bias).pow(beta)
 
-def MeanVarianceNormalization(x: Tensor, axis=(0, 2, 3)):
-  mean = x.mean(axis, keepdim=True)
-  std = x.std(axis, keepdim=True, correction=0)
-  return (x - mean) / (std + 1e-9)
+def MeanVarianceNormalization(x: Tensor, axis=(0, 2, 3)): return (x - x.mean(axis, keepdim=True)) / (x.std(axis, keepdim=True, correction=0) + 1e-9)
 
 def NegativeLogLikelihoodLoss(x: Tensor, target: Tensor, weight=None, ignore_index=None, reduction="mean"):
   return x.nll_loss(target, weight, ignore_index, reduction)
@@ -309,6 +304,7 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
     else: raise ValueError(f"invalid {coordinate_transformation_mode=}")
     return index.clip(0, input_dim-1)
 
+  roi, scales, sizes = (to_python_const(a) for a in (roi, scales, sizes))
   scales, sizes = (None if scales is None else scales[-2:]), (None if sizes is None else sizes[-2:])
   # we pre permute the axes and permute back after resize
   axes, input_shape, = (axes or list(range(X.ndim))), X.shape[2:],
@@ -326,7 +322,7 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
   roi = [[st, ed] for st, ed in zip(roi, roi[len(roi)//2:])] if isinstance(roi, list) else [None] * (X.ndim-2)
 
   # NOTE: this transformation makes it so that we can't just call Tensor.interpolate
-  # in Tensor.interpolate, we use aranged indexes without any transformation
+  # in Tensor.interpolate, we use indexes without any transformation
   indexes = []
   for shape, size, scale, region in zip(input_shape, sizes, scales, roi):
     indexes.append(_apply_transformation(Tensor.arange(size), shape, scale, region, shape * scale, coordinate_transformation_mode))
@@ -346,6 +342,7 @@ def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, 
   return X.permute(*[perm.index(i) for i in range(len(perm))]) if perm else X
 
 def CenterCropPad(t: Tensor, shape: Tensor, axes=None):
+  shape = to_python_const(shape)
   shrink_arg = [None] * t.ndim
   pad_arg = [None] * t.ndim
   for s, x in zip(shape, axes or range(t.ndim)):
@@ -355,6 +352,7 @@ def CenterCropPad(t: Tensor, shape: Tensor, axes=None):
   return t.shrink(tuple(shrink_arg)).pad(tuple(pad_arg))
 
 def OneHot(indices: Tensor, depth: Tensor, values: Tensor, axis=-1):
+  depth = to_python_const(depth)
   # Scalar or Rank 1 tensor containing exactly one element
   depth, indices = depth[0] if isinstance(depth, list) else depth, (indices < 0).where(indices+depth, indices),
   if axis < 0: axis += indices.ndim + 1
@@ -389,7 +387,7 @@ def DequantizeLinear(x: Tensor, x_scale: Tensor, x_zero_point: Union[Tensor, int
 def ImageDecoder(encoded_stream: Tensor, pixel_format="RGB"):
   try: import PIL.Image
   except ImportError as e: raise ImportError("Pillow must be installed to use the reference implementation of the ImageDecoder operator") from e
-  img = PIL.Image.open(io.BytesIO(encoded_stream))
+  img = PIL.Image.open(io.BytesIO(to_python_const(encoded_stream, True)))
   if pixel_format == "BGR": return Tensor(np.array(img))[:, :, ::-1]
   if pixel_format == "RGB": return Tensor(np.array(img))
   if pixel_format == "Grayscale": return Tensor(np.array(img.convert("L"))).unsqueeze(-1) # (H, W) to (H, W, 1)
