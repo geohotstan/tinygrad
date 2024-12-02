@@ -2002,8 +2002,24 @@ class Tensor(SimpleMathTrait):
   def _padding2d(self, padding:Union[int, Sequence[int]], dims:int) -> Sequence[int]:
     return [padding]*2*dims if isinstance(padding, int) else (padding if len(padding) == 2*dims else [p for p in padding for _ in range(2)][::-1])
 
+  def _ceil_mode_padding2d(self,k_:Tuple[sint, ...], s_:Union[Tuple[int, ...], int], d_:Union[Tuple[int, ...], int],
+                           p_:Union[Tuple[int, ...], int]) -> Sequence[int]:
+    (d_,s_,p_), i_ = (make_tuple(x, len(k_)) for x in (d_,s_,p_)), self.shape[-len(k_):]
+    # https://arxiv.org/pdf/1603.07285 section 5.1, relationship 15.
+    o_ = [ceildiv(i+2*p - (d*(k-1)+1), s) + 1 for i,d,k,s,p in zip(i_,d_,k_,s_,p_)]
+    print(o_)
+    pads = list(self._padding2d(p_, len(k_)))
+    # we have to do additional padding before `_pool` so that `o_` in `_pool` is calculated correctly
+    # `s*(o-1) + (d*(k-1)+1) - (i+2*p)` -> last_sliding_window_start + full_kernel_size - padded_input_shape
+    # `pads[-1-dim*2]` -> end pads
+    for dim,(o,i,s,p,k,d) in enumerate(zip(o_,i_,s_,p_,k_,d_)): pads[-1-dim*2] += s*(o-1) + (d*(k-1)+1) - (i+2*p)
+    # we then decrease padding in the case that a sliding window starts in the end padded region, thereby decreasing `o_` in `_pool`
+    # `smax(s*(o-1) + 1 - (i+p), 0)` -> last_sliding_window_start + zero_offset - (input_size + left_pad)
+    for dim,(o,i,s,p,k,d) in enumerate(zip(o_,i_,s_,p_,k_,d_)): pads[-1-dim*2] -= smax(s*(o-1) + 1 - (i+p), 0)
+    return pads
+
   # NOTE: these work for more than 2D
-  def avg_pool2d(self, kernel_size=(2,2), stride=None, dilation=1, padding=0, count_include_pad=True):
+  def avg_pool2d(self, kernel_size=(2,2), stride=None, dilation=1, padding=0, ceil_mode=False, count_include_pad=True):
     """
     Applies average pooling over a tensor.
 
@@ -2019,11 +2035,18 @@ class Tensor(SimpleMathTrait):
     print(t.avg_pool2d(padding=1).numpy())
     ```
     """
-    padding_, axis = self._padding2d(padding, len(k_ := make_tuple(kernel_size, 2))), tuple(range(-len(k_), 0))
-    def pool(x:Tensor) -> Tensor: return x.pad(padding_)._pool(k_, stride if stride is not None else k_, dilation)
-    return pool(self).mean(axis=axis) if count_include_pad else pool(self).sum(axis=axis) / pool(self.ones_like()).sum(axis=axis)
+    k_ = make_tuple(kernel_size, 2)
+    real_pads, axis = self._padding2d(padding,len(k_)), tuple(range(-len(k_), 0))
+    def pool(x:Tensor, padding_:Sequence[int]) -> Tensor: return x.pad(padding_)._pool(k_, stride if stride is not None else k_, dilation)
+    if not ceil_mode: return pool(self, real_pads).mean(axis=axis) if count_include_pad else \
+                             pool(self, real_pads).sum(axis=axis) / pool(self.ones_like(), real_pads).sum(axis=axis)
+    ceil_pads = self._ceil_mode_padding2d(k_, stride if stride is not None else k_, dilation, padding)
+    print(ceil_pads)
+    print(tuple(cp-rp for cp,rp in zip(ceil_pads, real_pads)))
+    return pool(self, ceil_pads).sum(axis) / pool(self.pad(real_pads).ones_like(), tuple(cp-rp for cp,rp in zip(ceil_pads, real_pads))).sum(axis) \
+           if count_include_pad else pool(self, ceil_pads).sum(axis=axis) / pool(self.ones_like(), ceil_pads).sum(axis=axis)
 
-  def max_pool2d(self, kernel_size=(2,2), stride=None, dilation=1, padding=0):
+  def max_pool2d(self, kernel_size=(2,2), stride=None, dilation=1, padding=0, ceil_mode=False):
     """
     Applies max pooling over a tensor.
 
@@ -2039,8 +2062,9 @@ class Tensor(SimpleMathTrait):
     print(t.max_pool2d(padding=1).numpy())
     ```
     """
-    padding_ = self._padding2d(padding, len(k_ := make_tuple(kernel_size, 2)))
-    return self.pad(padding_, value=dtypes.min(self.dtype))._pool(k_, stride if stride is not None else k_, dilation).max(tuple(range(-len(k_), 0)))
+    k_ = make_tuple(kernel_size, 2)
+    pads = self._ceil_mode_padding2d(k_, stride if stride is not None else k_, dilation, padding) if ceil_mode else self._padding2d(padding, len(k_))
+    return self.pad(pads, value=dtypes.min(self.dtype))._pool(k_, stride if stride is not None else k_, dilation).max(axis=tuple(range(-len(k_), 0)))
 
   def conv2d(self, weight:Tensor, bias:Optional[Tensor]=None, groups=1, stride=1, dilation=1, padding:int|Tuple[int, ...]=0,
              acc_dtype:Optional[DTypeLike]=None) -> Tensor:
