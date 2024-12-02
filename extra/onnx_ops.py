@@ -127,16 +127,11 @@ def Gemm(A: Tensor, B: Tensor, C: Tensor=None, alpha=1.0, beta=1.0, transA=0, tr
 def Einsum(*Inputs: List[Tensor], equation): return Tensor.einsum(equation, Inputs)
 
 def CumSum(X:Tensor, axis:Tensor, exclusive=0, reverse=0):
-  axis = to_python_const(axis)
-  if axis < 0: axis += X.ndim
+  if (axis := to_python_const(axis)) < 0: axis += X.ndim
   if reverse: X = X.flip(axis)
-  if exclusive:
-    pad_arg, shrink_arg = [None] * X.ndim, [None] * X.ndim
-    pad_arg[axis] = (1, 0)
-    shrink_arg[axis] = (0, X.shape[axis])
-    X = X.pad(tuple(pad_arg)).shrink(tuple(shrink_arg))
-  if reverse: return X.cumsum(axis).flip(axis)
-  return X.cumsum(axis)
+  if exclusive: X = X.pad(tuple((1,0) if i == axis else None for i in range(X.ndim)))\
+                      .shrink(tuple((0,X.shape[axis]) if i == axis else None for i in range(X.ndim)))
+  return X.cumsum(axis).flip(axis) if reverse else X.cumsum(axis)
 
 # TODO: this is copied from tinygrad/nn/__init__.py
 # spatial is from opset 7 and has since been removed
@@ -173,10 +168,10 @@ def GroupNormalization(x: Tensor, scale: Tensor, bias: Tensor, num_groups, epsil
 # (x1_begin, x2_begin, ..., x1_end, x2_end, ...) -> (..., x2_start, x2_end, x1_start, x1_end)
 def _onnx_pads_to_tiny_pads(pads): return flatten(reversed(list((pB, pE) for pB, pE in zip(pads, pads[len(pads)//2:]))))
 
-# (H_pad, W_pad) -> (U_pad, L_pad, D_pad, R_pad) aka (x1_begin, x2_begin, ..., x1_end, x2_end, ...)
+# (H_pad, W_pad) -> (U_pad, L_pad, D_pad, R_pad) which is (x1_begin, x2_begin, ..., x1_end, x2_end, ...)
 def _auto_pad(pads, auto_pad: Literal["SAME_UPPER", "SAME_LOWER"]):
   return [pads[i]//2 for i in range(len(pads))] + [pads[i]-pads[i]//2 for i in range(len(pads))] if auto_pad == "SAME_UPPER" else \
-          [pads[i]-pads[i]//2 for i in range(len(pads))] + [pads[i]//2 for i in range(len(pads))]
+         [pads[i]-pads[i]//2 for i in range(len(pads))] + [pads[i]//2 for i in range(len(pads))]
 
 def Pad(x: Tensor, pads: Union[Tensor, Tuple[int, ...]], constant_value: Optional[Tensor]=None, axes: Optional[Tensor]=None, mode="constant", value=0):
   pads, value, axes = to_python_const(pads), to_python_const(constant_value) or value or 0, to_python_const(axes) or list(range(x.ndim))
@@ -184,16 +179,15 @@ def Pad(x: Tensor, pads: Union[Tensor, Tuple[int, ...]], constant_value: Optiona
   for i,axis in enumerate(axes): real_pads[axis%x.ndim], real_pads[axis%x.ndim+x.ndim] = pads[i], pads[i+len(axes)]
   return x.pad(padding=_onnx_pads_to_tiny_pads(to_python_const(real_pads)), mode={"edge":"replicate", "wrap":"circular"}.get(mode, mode), value=value)
 
-def resolve_pool_pads(x, p_, k_, d_, s_, auto_pad):
-  i_,(s_,d_,p_) = x.shape[-len(k_):], (make_tuple(x, len(k_)*2) for x in (s_, d_, p_))
-  if auto_pad=="NOTSET": return _onnx_pads_to_tiny_pads(p_ if len(p_)==len(k_)*2 else p_*2)
+def resolve_pool_pads(x:Tensor, p_, k_, d_, s_, auto_pad):
+  i_, (s_,d_,p_) = x.shape[-len(k_):], (make_tuple(x, len(k_)*2) for x in (s_, d_, p_))
+  if auto_pad == "NOTSET": return _onnx_pads_to_tiny_pads(p_ if len(p_)==len(k_)*2 else p_*2)
   o_ = [((i - (1 if auto_pad in ("SAME_UPPER", "SAME_LOWER") else k)) // s + 1) for i,k,s in zip(i_, k_, s_)]
   return _onnx_pads_to_tiny_pads(_auto_pad([(o-1)*s+k-i for o,i,k,s in zip(o_, i_, k_, s_)], auto_pad))
 
 def AveragePool(X: Tensor, kernel_shape, auto_pad="NOTSET", ceil_mode=False, count_include_pad=False, dilations=1, pads=0, strides=1):
   pads = resolve_pool_pads(X, pads, kernel_shape, dilations, strides, auto_pad)
-  ret = X.pad(pads).avg_pool2d(kernel_shape, strides, dilations, ceil_mode=ceil_mode)
-  return ret if count_include_pad else ret / X.ones_like().pad(pads).avg_pool2d(kernel_shape, strides, dilations, ceil_mode=ceil_mode)
+  return X.avg_pool2d(kernel_shape, strides, dilations, pads, ceil_mode, count_include_pad)
 
 def MaxPool(X: Tensor, kernel_shape, auto_pad="NOTSET", ceil_mode=False, dilations=1, pads=0, storage_order=0, strides=1):
   pads = resolve_pool_pads(X, pads, kernel_shape, dilations, strides, auto_pad)
@@ -208,10 +202,11 @@ def MaxUnpool(xT: Tensor, xI: Tensor, outshape: Optional[Tensor]=None, kernel_sh
   if outshape is not None and outshape != ret.shape: pads = _auto_pad([outshape[-2] - ret.shape[-2], outshape[-1] - ret.shape[-1]], "SAME_UPPER")
   return ret.pad(_onnx_pads_to_tiny_pads(pads))
 
-def Conv(X: Tensor, W: Tensor, B:Optional[Tensor]=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, strides=1):
+def Conv(X: Tensor, W: Tensor, B:Optional[Tensor]=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=0, strides=1):
   padding = resolve_pool_pads(X, pads, kernel_shape or W.shape[2:], dilations, strides, auto_pad)
   return X.conv2d(W, B, stride=strides, groups=group, dilation=dilations, padding=padding)
 
+# TODO: this op has asymmetrical padding
 def ConvTranspose(X: Tensor, W: Tensor, B:Optional[Tensor]=None, auto_pad="NOTSET", dilations=1, group=1, kernel_shape=None, pads=None, output_shape=None, output_padding=0, strides=1):
   if kernel_shape is None: kernel_shape = W.shape[2:]
   if isinstance(strides, int): strides = [strides]*(W.ndim-2)
@@ -246,7 +241,7 @@ def Dropout(data: Tensor, ratio=0.5, training_mode=False, seed=None):
   return data * mask * (1/(1.0 - ratio)), mask
 
 def LRN(x: Tensor, size, alpha=1e-4, beta=0.75, bias=1.0):
-  pooled_x = (x**2).rearrange('b c h w -> b 1 c (h w)').pad2d((0,0,(size-1)//2, size//2)).avg_pool2d((size, 1), 1)
+  pooled_x = (x**2).rearrange('b c h w -> b 1 c (h w)').pad((0,0,(size-1)//2, size//2)).avg_pool2d((size, 1), 1)
   return x / (pooled_x.reshape(x.shape) * alpha + bias).pow(beta)
 
 def MeanVarianceNormalization(x: Tensor, axis=(0, 2, 3)): return (x - x.mean(axis, keepdim=True)) / (x.std(axis, keepdim=True, correction=0) + 1e-9)
@@ -368,7 +363,7 @@ def Compress(inp: Tensor, condition: Tensor, axis=None):
   return inp[tuple(con if i == axis else slice(None) for i in range(inp.ndim))]
 
 def EyeLike(x: Tensor, dtype=None, k=0):
-  ret = Tensor.eye(cast(int, min(x.shape)), dtype=dtype)
+  ret = Tensor.eye(cast(int, min(x.shape)), dtype=DTYPE_MAP[dtype] if dtype else x.dtype)
   return ret if x.size(0) == x.size(1) else ret.pad(tuple(None if d == ret.size(0) else (k, d-ret.size(0)-k) for d in x.shape))
 
 def Upsample(X, scales, mode): return Resize(X=X, scales=scales, mode=mode)
