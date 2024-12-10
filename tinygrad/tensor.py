@@ -1223,7 +1223,7 @@ class Tensor(SimpleMathTrait):
     assert index.ndim == self.ndim, f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}"
     dim = self._resolve_dim(dim)
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
-    index = index.to(self.device)
+    index = (index.to(self.device) < 0).where(self.shape[dim], 0) + index
     x = self.shrink(tuple((0, i) if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
     return (x * index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim])).sum(-1, acc_dtype=self.dtype)
 
@@ -2366,7 +2366,8 @@ class Tensor(SimpleMathTrait):
     print(Tensor.full((2, 4), 2.0).scatter(1, Tensor([[2], [3]]), 1.23, reduce='add').numpy())
     ```
     """
-    index, dim = index.to(self.device), self._resolve_dim(dim)
+    dim = self._resolve_dim(dim)
+    index = (index.to(self.device) < 0).where(self.shape[dim], 0) + index
     src = src.cast(self.dtype) if isinstance(src, Tensor) else Tensor(src, device=self.device, dtype=self.dtype)._broadcast_to(index.shape)
     assert index.ndim == self.ndim == src.ndim, f"self.ndim, index.ndim and src.dim must all equal, {self.ndim=} {index.ndim=} {src.ndim=}"
     assert all((d == dim or self_ >= index_) and src_ >= index_ for d,(self_,index_,src_) in enumerate(zip(self.shape, index.shape, src.shape))), \

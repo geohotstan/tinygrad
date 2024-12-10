@@ -319,12 +319,8 @@ def Gather(x: Tensor, indices: Tensor, axis=0):
 def Scatter(*args, **kwargs): return ScatterElements(*args, **kwargs) # deprecated
 
 def ScatterElements(x: Tensor, indices: Tensor, updates: Tensor, axis=0, reduction:Optional[str]=None):
-  if reduction in {"min", "max"}: raise NotImplementedError("min and max reduction not supported")
-  indices = (indices < 0).where(x.shape[axis], 0) + indices
   return x.scatter(axis, indices, updates, reduction)
-def GatherElements(x: Tensor, indices: Tensor, axis):
-  indices = (indices < 0).where(x.shape[axis], 0) + indices
-  return x.gather(axis, indices)
+def GatherElements(x: Tensor, indices: Tensor, axis): return x.gather(axis, indices)
 
 def Resize(X:Tensor, roi=None, scales=None, sizes=None, antialias=0, axes=None, coordinate_transformation_mode='half_pixel',
           cubic_coeff_a=-0.75, exclude_outside=0, extrapolation_value=0.0, keep_aspect_ratio_policy='stretch',
