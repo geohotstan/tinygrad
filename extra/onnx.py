@@ -1,14 +1,13 @@
 from __future__ import annotations
-from typing import List, Dict, Union, Callable, Any, Sequence, Tuple
-from dataclasses import dataclass
+from typing import List, Dict, Union, Callable, Any, Sequence
 import importlib, functools
 import numpy as np
-from google.protobuf.json_format import MessageToDict, MessageToJson
+from google.protobuf.json_format import MessageToDict
 from tinygrad import Tensor, dtypes
 from tinygrad.helpers import getenv, DEBUG, all_same
 from tinygrad.dtype import DType, ConstType
 from tinygrad.device import is_dtype_supported
-from onnx import AttributeProto, ModelProto, TensorProto, ValueInfoProto, TypeProto
+from onnx import AttributeProto, ModelProto, TensorProto, ValueInfoProto
 try:
   from onnx.helper import tensor_dtype_to_np_dtype
 except ImportError:
@@ -113,8 +112,7 @@ def get_run_onnx(onnx_model: ModelProto):
         if onnx_dim.dim_param is None and onnx_dim.dim_value != user_input.shape[d]:
           raise RuntimeError(f"{model_input.name} received value {user_input.shape[d]} on dim {d}, expected {onnx_dim.dim_value}")
       return tensor
-    type_field_names = [field.name for field,_ in type_proto.ListFields()]
-    raise NotImplementedError(f"{model_input.name} with {type_field_names=} is not supported")
+    raise NotImplementedError(f"{model_input.name} with {MessageToDict(model_input.type)} is not supported")
 
   def run_onnx(inputs={}, debug=0):
     debug = getenv("DEBUGONNX") or debug
