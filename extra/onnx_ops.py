@@ -529,7 +529,7 @@ def onnx_training(input_group_size):
     def __wrapper(R, T, *inputs, **kwargs):
       old_training = Tensor.training
       Tensor.training = True
-      T, R = to_python_const(T), R.detach()
+      T = to_python_const(T)
       groups = len(inputs) // input_group_size
       ret = [func(R, T, *inps, **kwargs) for inps in (inputs[i::groups] for i in range(groups))]
       Tensor.training = old_training
