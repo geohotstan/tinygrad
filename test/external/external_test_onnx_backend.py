@@ -1,6 +1,8 @@
 import unittest
 from typing import Any, Tuple
 from onnx.backend.base import Backend, BackendRep
+from onnx.backend.test.case.test_case import TestCase
+import onnx
 import onnx.backend.test
 import numpy as np
 from tinygrad import Tensor, Device, dtypes
@@ -38,13 +40,34 @@ class TinygradBackend(Backend):
     # NOTE: this is onnx CPU
     return device == "CPU"
 
-backend_test = onnx.backend.test.BackendTest(TinygradBackend, __name__)
+# add support for in-memory tests
+class TinygradBackendTestRunner(onnx.backend.test.BackendTest):
+  def include_in_memory_test(self, test:TestCase, kind:str):
+    assert test.model is not None and test.data_sets is not None, "must have in memory data"
+    model_marker = [test.model]
+    def run(test_self, device='CPU', **kwargs):
+      model = test.model
+      if hasattr(self.backend, "is_compatible") and not self.backend.is_compatible(model):
+        raise unittest.SkipTest("Not compatible with backend")
+      prepared = self.backend.prepare(model, device, **kwargs)
+      for inputs, ref_outputs in test.data_sets:
+        outputs = prepared.run(inputs)
+        self.assert_similar_outputs(ref_outputs, outputs, test.rtol, test.atol)
+    self._add_test(kind + "Node", test.name, run, model_marker)
 
-# TODO: there isn't an AttributeProto for `epsilon` in the NodeProto for 'test_adam_multiple_cpu'
-# [x.name for x in n.attribute] -> ['alpha', 'beta', 'norm_coefficient']
-# but in their documentation https://github.com/onnx/onnx/blob/main/docs/Operators.md#examples-176, it states there being an epsilon of 1e-2
-# test passes with epsilon = 1e-2
+backend_test = TinygradBackendTestRunner(TinygradBackend, __name__)
+
+from test.external.external_test_onnx_superset import TEST_CASES, REPLACEMENT_ADAM_MULTIPLE_TEST
+
+# add local tests
+for test in TEST_CASES:
+  backend_test.include_in_memory_test(test, "Tinygrad")
+
+# BUG: onnx didn't include epsilon in their node
+# https://github.com/onnx/onnx/blob/main/onnx/backend/test/case/node/adam.py#L93
 backend_test.exclude('test_adam_multiple_cpu')
+# correct replacement test of incorrect onnx test
+backend_test.include_in_memory_test(REPLACEMENT_ADAM_MULTIPLE_TEST, "Tinygrad")
 
 # about different dtypes
 if not is_dtype_supported(dtypes.float64):
@@ -93,10 +116,6 @@ backend_test.exclude('test_bitshift_*')
 backend_test.exclude('string')
 backend_test.exclude('test_strnorm_*')
 backend_test.exclude('test_regex_*')
-
-# no scatternd gathernd
-backend_test.exclude('test_gathernd_*')
-backend_test.exclude('test_scatternd_*')
 
 # no quantize
 backend_test.exclude('test_dynamicquantizelinear_*')
@@ -162,8 +181,11 @@ backend_test.exclude('test_resize_tf_crop_and_resize_cpu') # unsure about fill v
 backend_test.exclude('test_ai_onnx_ml_label_encoder_tensor_value_only_mapping_cpu') # bad data type string
 backend_test.exclude('test_ai_onnx_ml_label_encoder_tensor_mapping_cpu') # bad data type string
 backend_test.exclude('test_group_normalization_*') # numerical inaccuracy problem. Current Group Normalization OP fails test
+
 backend_test.exclude('test_scatter_elements_with_reduction_min_cpu') # min not yet supported
+backend_test.exclude('test_scatternd_min_cpu') # min not yet supported
 backend_test.exclude('test_scatter_elements_with_reduction_max_cpu') # max not yet supported
+backend_test.exclude('test_scatternd_max_cpu') # max not yet supported
 
 if Device.DEFAULT in ['GPU', 'METAL']:
   backend_test.exclude('test_resize_upsample_sizes_nearest_axes_2_3_cpu')
