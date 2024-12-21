@@ -141,7 +141,7 @@ class Tensor(SimpleMathTrait):
     if isinstance(data, (UOp, MultiLazyBuffer)):
       assert dtype is None or dtype==data.dtype, "dtype doesn't match, and casting isn't supported"
       # NOTE: this is here because LazyBuffer = UOp
-      if isinstance(data, UOp) and data.op is Ops.BIND: data = _metaop(Ops.CONST, tuple(), dtype or data.dtype, device, data)
+      if isinstance(data, UOp) and data.op is Ops.BIND: data = _metaop(Ops.BIND, tuple(), dtype or data.dtype, device, data)
     elif data is None: data = _metaop(Ops.EMPTY, (0,), dtype or dtypes.default_float, device)
     elif isinstance(data, get_args(ConstType)): data = _metaop(Ops.CONST, tuple(), dtype or dtypes.from_py(data), device, data)
     elif isinstance(data, bytes): data = _frompy(data, dtypes.uint8 if dtype is None else dtype)
@@ -2752,6 +2752,31 @@ class Tensor(SimpleMathTrait):
     ```
     """
     return self.maximum(0) + (alpha * ((self / alpha).exp() - 1)).minimum(0)
+
+  def prelu(self, weight:Tensor, channel_dim:int|None=None):
+    """
+    Applies the Parametric Rectified Linear Unit (PReLU) function element-wise.
+
+    NOTE: prelu follows unconventional broadcasting rules determined by `channel_dim` only when `weight` is a non-scalar 1-D Tensor:
+      - If `channel_dim` is an integer, it specifies the channel dimension whose size must match the size of `weight`.
+      - If `channel_dim` is `None`, it is inferred by finding the first dimension of `self` that matches the size of `weight`.
+
+    - Described: https://paperswithcode.com/method/prelu
+    - Paper: https://arxiv.org/abs/1502.01852v1
+
+    ```python exec="true" source="above" session="tensor" result="python"
+    x = Tensor([[1.0, -2.0, 3.0, -4.0], [-1.0, 2.0, -3.0, 4.0]])
+    print(x.prelu(Tensor([0.1, 0.2, 0.3, 0.4])).numpy())
+    ```
+    ```python exec="true" source="above" session="tensor" result="python"
+    x = Tensor([[[[1.0, -1.0], [2.0, -2.0]], [[-0.5, 0.5], [-1.5, 1.5]]]])
+    print(x.prelu(Tensor([0.1, 0.2]), channel_dim=1).numpy())
+    ```
+    """
+    if weight.ndim == 1 and weight.numel() > 1:
+      channel_dim = self.shape.index(weight.shape[0]) if channel_dim is None else channel_dim
+      weight = weight.reshape([self.shape[i] if i == channel_dim else 1 for i in range(self.ndim)])
+    return (self > 0).where(self, self * weight)
 
   def selu(self, alpha=1.67326, gamma=1.0507):
     """
