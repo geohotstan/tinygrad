@@ -765,6 +765,19 @@ class TestOps(unittest.TestCase):
   def test_selu(self):
     helper_test_op([(45,65)], torch.nn.functional.selu, Tensor.selu)
     helper_test_op([()], torch.nn.functional.selu, Tensor.selu)
+  def test_silu(self):
+    helper_test_op([(45,65)], torch.nn.functional.silu, Tensor.silu)
+    helper_test_op([()], torch.nn.functional.silu, Tensor.silu)
+  def test_swish(self):
+    helper_test_op([(45,65)], torch.nn.functional.silu, Tensor.swish)
+    helper_test_op([()], torch.nn.functional.silu, Tensor.swish)
+
+  def test_prelu(self):
+    helper_test_op([(45,65), ()], lambda x,w: torch.nn.functional.prelu(x,w), lambda x,w: Tensor.prelu(x,w))
+    helper_test_op([(3,6), (6,)], lambda x,w: torch.nn.functional.prelu(x,w), lambda x,w: Tensor.prelu(x,w))
+    helper_test_op([(1,3,6), ()], lambda x,w: torch.nn.functional.prelu(x,w), lambda x,w: Tensor.prelu(x,w))
+    helper_test_op([(1,3,6), (3,)], lambda x,w: torch.nn.functional.prelu(x,w), lambda x,w: Tensor.prelu(x,w))
+    helper_test_op([(1,3,6,6), (3,)], lambda x,w: torch.nn.functional.prelu(x,w), lambda x,w: Tensor.prelu(x,w))
 
   def test_abs(self):
     helper_test_op([(45,65)], torch.abs, Tensor.abs)
