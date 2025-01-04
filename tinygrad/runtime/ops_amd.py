@@ -235,7 +235,7 @@ class AMDProgram(HCQProgram):
     self.kernargs_segment_size = image[entry_point+8:entry_point+12].cast("I")[0]
 
     lds_size = ((self.group_segment_size + 511) // 512) & 0x1FF
-    if lds_size > (self.dev.dev_iface.props['lds_size_in_kb'] * 1024) // 512: raise RuntimeError("Too many resources requested: group_segment_size")
+    if lds_size > ((self.dev.dev_iface.props['lds_size_in_kb'] * 1024) // 512): raise RuntimeError("Too many resources requested: group_segment_size")
     if self.private_segment_size > self.dev.max_private_segment_size: raise RuntimeError("Too many resources requested: private_segment_size")
 
     code = hsa.amd_kernel_code_t.from_address(self.lib_gpu.va_addr + entry_point) # NOTE: this is wrong, it's not this object
@@ -445,7 +445,7 @@ class PCIIface:
       if first_dev: vfio.VFIO_SET_IOMMU(PCIIface.vfio_fd, vfio.VFIO_NOIOMMU_IOMMU)
       self.vfio_dev = vfio.VFIO_GROUP_GET_DEVICE_FD(self.vfio_group, ctypes.create_string_buffer(self.pcibus.encode()))
 
-      self.irq_fd = os.eventfd(0, 0)
+      self.irq_fd = os.eventfd(0, 0)   # type: ignore[attr-defined]
       self.irq_poller = select.poll()
       self.irq_poller.register(self.irq_fd, select.POLLIN)
 

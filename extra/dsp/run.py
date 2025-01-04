@@ -8,7 +8,7 @@ def get_struct(argp, stype):
   return ctypes.cast(ctypes.c_void_p(argp), ctypes.POINTER(stype)).contents
 
 def format_struct(s):
-  sdats = []
+  sdats:list[str|tuple] = []
   for field in s._fields_:
     dat = getattr(s, field[0])
     if isinstance(dat, int): sdats.append(f"{field[0]}:0x{dat:X}")
@@ -106,12 +106,12 @@ def install_hook(c_function, python_function):
   assert ret == 0
   ret = libc.mprotect(ctypes.c_ulong((ctypes.addressof(orig_func)//0x1000)*0x1000), 0x3000, 7)
   assert ret == 0
-  libc.memcpy(orig_func, ioctl_address.contents, 0x1000)
-  libc.memcpy(ioctl_address.contents, ctypes.create_string_buffer(tramp), len(tramp))
+  libc.memcpy(orig_func, ioctl_address.contents, 0x1000)  # type: ignore
+  libc.memcpy(ioctl_address.contents, ctypes.create_string_buffer(tramp), len(tramp))  # type: ignore
   return orig_func
 
-libc = ctypes.CDLL(ctypes.util.find_library("libc"))
-install_hook(libc.ioctl, ioctl)
+libc = ctypes.CDLL(ctypes.util.find_library("libc"))  # type: ignore
+install_hook(libc.ioctl, ioctl)  # type: ignore[attr-defined]
 adsp = ctypes.CDLL(ctypes.util.find_library("adsprpc"))
 
 def send_rpc_invoke(filename):
