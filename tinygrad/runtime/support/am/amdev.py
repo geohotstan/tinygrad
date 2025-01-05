@@ -206,6 +206,7 @@ class AMMemoryManager:
 
         for pte_idx in range(upd_pte):
           pe = pt.get_entry(pte_st_idx + pte_idx)
+          assert pe & am.AMDGPU_PTE_VALID == 0, f"Entry already set {pe:#x}"
           assert (pe & am.AMDGPU_PTE_VALID) == 0, f"Entry already set {pe:#x}"
           pt.set_page(pte_st_idx + pte_idx, paddr=lpaddr + off, uncached=uncached, system=system, snooped=snooped, frag=f_cnt, valid=True)
           off += pte_covers
