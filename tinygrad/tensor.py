@@ -320,7 +320,7 @@ class Tensor(SimpleMathTrait):
     assert self.dtype.base.fmt is not None, f"no fmt dtype for {self.dtype.base}"
     assert all_int(self.shape), f"no data if shape is symbolic, {self.shape=}"
     if TYPE_CHECKING or sys.version_info < (3, 12): assert self.dtype.base.fmt != "e"
-    return cast(memoryview, self._data().cast(self.dtype.base.fmt) if 0 in self.shape else self._data().cast(self.dtype.base.fmt, self.shape))
+    return self._data().cast(self.dtype.base.fmt) if 0 in self.shape else self._data().cast(self.dtype.base.fmt, self.shape)
 
   def item(self) -> ConstType:
     """
@@ -334,9 +334,7 @@ class Tensor(SimpleMathTrait):
     assert self.numel() == 1, "must have one element for item"
     return self.data()[(0,) * len(self.shape)]
 
-  # TODO: should be Tensor.tolist() -> Union[list[ConstType], ConstType]. The List is Sequence because mypy expects memoryview.tolist() -> list[int]
-  # src: https://github.com/python/mypy/blob/release-1.6/mypy/typeshed/stdlib/builtins.pyi#L803
-  def tolist(self) -> Union[Sequence[ConstType], ConstType]:
+  def tolist(self) -> Union[list[ConstType], ConstType]:
     """
     Returns the value of this tensor as a nested list.
 
@@ -345,7 +343,7 @@ class Tensor(SimpleMathTrait):
     print(t.tolist())
     ```
     """
-    return self.data().tolist()
+    return cast(Union[list[ConstType], ConstType], self.data().tolist())
 
   def numpy(self) -> 'np.ndarray':  # type: ignore [name-defined] # noqa: F821
     """

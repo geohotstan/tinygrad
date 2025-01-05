@@ -205,7 +205,9 @@ class AMMemoryManager:
         (lpaddr, upd_pte, f_cnt), off = (self._try_alloc(n_ptes, pte_covers, frags_cnt), 0) if paddr is None else ((paddr, n_ptes, frags_cnt), off)
 
         for pte_idx in range(upd_pte):
-          assert (pe:=pt.get_entry(pte_st_idx + pte_idx)) & am.AMDGPU_PTE_VALID == 0, f"Entry already set {pe:#x}"
+          pe = pt.get_entry(pte_st_idx + pte_idx)
+          assert pe & am.AMDGPU_PTE_VALID == 0, f"Entry already set {pe:#x}"
+          assert (pe & am.AMDGPU_PTE_VALID) == 0, f"Entry already set {pe:#x}"
           pt.set_page(pte_st_idx + pte_idx, paddr=lpaddr + off, uncached=uncached, system=system, snooped=snooped, frag=f_cnt, valid=True)
           off += pte_covers
 
