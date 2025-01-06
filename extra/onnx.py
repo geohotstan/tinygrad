@@ -30,7 +30,6 @@ def to_python_const(t) -> list[ConstType]|ConstType|bytes:
     cache_misses = info.misses
   return ret
 
-# TODO: use real float16
 # src: onnx/mapping.py
 DTYPE_MAP: dict[int, DType] = {
   TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
