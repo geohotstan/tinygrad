@@ -4,16 +4,15 @@
 import unittest
 import os, re, tempfile
 import numpy as np
-from torch.onnx._internal.onnxruntime import OrtExecutionInfoForAllGraphModules
 
 from tinygrad import Tensor
 from tinygrad.helpers import CI
 from tinygrad.device import is_dtype_supported
-from extra.onnx import get_run_onnx, dtype_parse, DTYPE_MAP
+from extra.onnx import get_run_onnx, DTYPE_MAP
 
 import onnx
 import onnxruntime.backend
-from onnx import TensorProto, ValueInfoProto, helper, mapping, numpy_helper
+from onnx import TensorProto, ValueInfoProto, helper, mapping
 from onnxruntime.quantization import CalibrationDataReader, quantize_static
 from onnxruntime.capi.onnxruntime_pybind11_state import InvalidArgument
 
@@ -27,7 +26,7 @@ def is_version_greater_than(ver):
   return "".join(re.findall(r"(\d+\.)(\d+\.)(\d)", onnx.__version__)[0]) > "".join(re.findall(r"(\d+\.)(\d+\.)(\d)", ver)[0])
 
 def get_tinygrad_output(model:onnx.ModelProto, inputs) -> list:
-  input_names = [input.name for input in model.graph.input]
+  input_names = [inp.name for inp in model.graph.input]
   if not isinstance(inputs, list): inputs = [inputs]
   inp = dict(zip(input_names, inputs))
   tinygrad_runner = get_run_onnx(model)
@@ -129,7 +128,8 @@ class TestOnnx(unittest.TestCase):
   #     self._test_input_parsing(
   #       expected_input=helper.make_tensor_sequence_value_info("in", elem_type=input_type, shape=input_shape),
   #       expected_output=helper.make_tensor_sequence_value_info("out", elem_type=input_type, shape=input_shape),
-  #       actual_input=[np.array([1.0, 2.0], dtype=helper.tensor_dtype_to_np_dtype(input_type)), np.array([3.0, 4.0], dtype=helper.tensor_dtype_to_np_dtype(input_type))],
+  #       actual_input=[np.array([1.0, 2.0], dtype=helper.tensor_dtype_to_np_dtype(input_type)),
+  #                     np.array([3.0, 4.0], dtype=helper.tensor_dtype_to_np_dtype(input_type))],
   #     )
   #
   # def test_input_sequence_type_errors(self):
@@ -137,8 +137,8 @@ class TestOnnx(unittest.TestCase):
   #   pass
 
   def test_input_optional_type(self):
-    def _make_optional_type_proto(name, type, shape):
-      elem_type = helper.make_tensor_type_proto(elem_type=type, shape=shape)
+    def _make_optional_type_proto(name, data_type, shape):
+      elem_type = helper.make_tensor_type_proto(elem_type=data_type, shape=shape)
       optional_type = helper.make_optional_type_proto(elem_type)
       return helper.make_value_info(name, optional_type)
 
@@ -224,7 +224,6 @@ class TestOnnxOps(unittest.TestCase):
     tinygrad_out = get_tinygrad_output(model, x)
     np.testing.assert_allclose(ref_shape, tinygrad_out[0].shape)
 
-
   def test_expand(self):
     def _test_expand(name, data, shape, ref_data, dtype="int32"):
       shape_array = np.array(shape)
@@ -289,8 +288,6 @@ class TestOnnxOps(unittest.TestCase):
     _test_expand("expand_smaller_self_shape_test", data, shape, ref_data, "int32")
     _test_expand("expand_smaller_self_shape_test", data, shape, ref_data, "int64")
 
-
-
   def test_depth_to_space(self):
     def verify_depth_to_space(inshape, outshape, mode, block_size):
       node = onnx.helper.make_node(
@@ -310,7 +307,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_depth_to_space((1, 8, 2, 3), (1, 2, 4, 6), mode="CRD", block_size=2)
 
-
   def test_space_to_depth(self):
     def verify_space_to_depth(inshape, outshape, block_size):
       node = onnx.helper.make_node(
@@ -329,7 +325,6 @@ class TestOnnxOps(unittest.TestCase):
       verify_with_ort(model, [inshape])
 
     verify_space_to_depth((1, 1, 4, 6), (1, 4, 2, 3), 2)
-
 
   def test_shape(self):
     in_shape = (4, 3, 3, 4)
@@ -364,8 +359,6 @@ class TestOnnxOps(unittest.TestCase):
     tinygrad_out = get_tinygrad_output(model, x)
     np.testing.assert_allclose(ref_shape, tinygrad_out[0])
 
-
-
   def test_power(self):
     def _test_power_iteration(x_shape, y_shape):
       if isinstance(y_shape, int):
@@ -396,8 +389,6 @@ class TestOnnxOps(unittest.TestCase):
     _test_power_iteration((1, 3), (1))
     _test_power_iteration((2, 3), (2, 3))
     _test_power_iteration((2, 3), (1, 3))
-
-
 
   def test_range(self):
     def verify_range(start, limit, delta, dtype):
@@ -449,7 +440,6 @@ class TestOnnxOps(unittest.TestCase):
 #
 #     verify_with_ort(model, [input_shape])
 
-
   def test_squeeze(self):
     def test_squeeze_once(in_shape, out_shape, axes=None):
       # TODO: nasty way of adding axes. Find a better way
@@ -474,8 +464,6 @@ class TestOnnxOps(unittest.TestCase):
     test_squeeze_once((1, 3, 1, 3, 1, 1), (3, 3))  # empty axis.
     test_squeeze_once((), ())  # scalar testing.
 
-
-
   def test_flatten(self):
     def verify_flatten(in_shape, axis, ref_shape):
       flatten_node = helper.make_node("Flatten", ["in"], ["out"], axis=axis)
@@ -492,8 +480,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_flatten((1, 3, 4, 4), 1, (1, 48))
     verify_flatten((1,), 1, (1, 1))
-
-
 
   def test_unsqueeze(self):
     in_shape = (3, 3)
@@ -513,7 +499,6 @@ class TestOnnxOps(unittest.TestCase):
 
     model = helper.make_model(graph, producer_name="squeeze_test")
     verify_with_ort(model, [in_shape])
-
 
   @unittest.skip("ort invalid graph")
   def test_unsqueeze_with_neg_axes(self):
@@ -553,8 +538,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_unsqueeze_with_neg_axes()
     verify_unsqueeze_with_neg_axes()
 
-
-
   def test_gather(self):
     def verify_gather(in_shape, indices, axis, dtype):
       x = np.random.uniform(size=in_shape).astype(dtype)
@@ -588,8 +571,6 @@ class TestOnnxOps(unittest.TestCase):
     # TODO: negative axis fails
     # verify_gather((3, 3, 3), [[[1, 0]]], -1, "int32")
     verify_gather((4, 3, 5, 6), [[2, 1, 0, 0]], 0, "float32")
-
-
 
   def test_dynamic_gather(self):
     dtype = "float32"
@@ -631,8 +612,6 @@ class TestOnnxOps(unittest.TestCase):
     result = get_tinygrad_output(model, [x])
     np.testing.assert_allclose(out_np, result[0], rtol=1e-5, atol=1e-5)
 
-
-
   def test_gatherelements(self):
     def verify_gatherelements(in_shape, indices, axis):
       x = np.random.uniform(size=in_shape).astype("float32")
@@ -665,8 +644,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_gatherelements((3, 3, 3), indices, 2)
 
-
-
   @unittest.skip("ort invalid graph")
   def test_scatter(self):
     def verify_scatter(in_shape, indices, axis):
@@ -697,8 +674,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_scatter((2, 2), [[1, 0], [0, 1]], 1)
     verify_scatter((3, 3, 3), [[[-1, -3]]], -1)
     verify_scatter((4, 3, 5, 6), [[[[2, 1, 0, 0]]]], 0)
-
-
 
   def test_scatter_elements(self):
     def verify_scatter_elements(in_shape, indices, axis=0, reduction=None):
@@ -766,7 +741,6 @@ class TestOnnxOps(unittest.TestCase):
     #   0,
     #   "max",
     # )
-
 
   @unittest.skip("ort invalid graph")
   def test_slice(self):
@@ -963,7 +937,6 @@ class TestOnnxOps(unittest.TestCase):
       steps=(1, 2),
     )
 
-
   # *** elementwise ***
   def _test_onnx_op_elementwise(
     self, inshape, outfunc, npargs, dtype, opname, kwargs, opset=None, verify=True, rtol=1e-5, atol=1e-5
@@ -988,14 +961,11 @@ class TestOnnxOps(unittest.TestCase):
     else:
       get_tinygrad_output(model, [indata])
 
-
   def test_floor(self):
     self._test_onnx_op_elementwise((2, 4, 5, 6), np.floor, {}, "float32", "Floor", {})
 
   def test_ceil(self):
     self._test_onnx_op_elementwise((2, 4, 5, 6), np.ceil, {}, "float32", "Ceil", {})
-
-
 
   @unittest.skip("ort invalid graph")
   def test_clip(self):
@@ -1029,8 +999,6 @@ class TestOnnxOps(unittest.TestCase):
       opset=6,
     )
 
-
-
   def test_clip_min_max_as_inputs(self):
     input_shape = (2, 4, 5, 6)
     nodes = [
@@ -1049,14 +1017,11 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_with_ort(model, [input_shape])
 
-
-
   def test_round(self):
     self._test_onnx_op_elementwise((2, 4, 5, 6), np.round, {}, "float32", "Round", {})
     self._test_onnx_op_elementwise(
       (2, 4, 5, 6), np.round, {}, "float64", "Round", {}, verify=False
     )  # TODO: enable verification once ORT supports float64
-
 
   def _test_finite_ops(self, inshape, outfunc, npargs, dtype, opname, kwargs):
     indata = np.random.choice(a=[np.nan, np.inf, -np.inf, 0.5, 1.0, 0], size=inshape).astype(dtype)
@@ -1074,17 +1039,11 @@ class TestOnnxOps(unittest.TestCase):
     model = helper.make_model(graph, producer_name=opname + "_test")
     verify_with_ort_with_inputs(model, [indata])
 
-
-
   def test_isinf(self):
     self._test_finite_ops((2, 4, 5, 6), np.isinf, {}, "float32", "IsInf", {})
 
-
-
   def test_isnan(self):
     self._test_finite_ops((2, 4, 5, 6), np.isnan, {}, "float32", "IsNaN", {})
-
-
 
   def test_gather_nd(self):
     def verify_gather_nd(in_shape, indices, out_shape, dtype="float32", batch_dims=0, opset=11):
@@ -1130,8 +1089,6 @@ class TestOnnxOps(unittest.TestCase):
         opset=12,
       )
 
-
-
   def test_onehot(self):
     indices_shape = [10]
     indices_array = np.random.randint(low=0, high=9, size=indices_shape, dtype="int32")
@@ -1156,8 +1113,6 @@ class TestOnnxOps(unittest.TestCase):
 
     tinygrad_out = get_tinygrad_output(model, [indices_array, np.array([depth]).astype("int32"), values])
     np.testing.assert_allclose(out_np, tinygrad_out[0], rtol=1e-5, atol=1e-5)
-
-
 
   def test_gemm(self):
     def verify_gemm(a_shape, b_shape, c_shape=None, freeze_params=False, dtype="float32"):
@@ -1199,8 +1154,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_gemm(a_shape=(4, 3), b_shape=(3, 4), c_shape=(4,), freeze_params=True)
     verify_gemm(a_shape=(4, 3), b_shape=(3, 4), c_shape=(4,), freeze_params=True, dtype="float16")
 
-
-
   def test_matmul(self):
     def test_one_matmul(a_shape, b_shape):
       out_shape = np.matmul(np.zeros(a_shape), np.zeros(b_shape)).shape
@@ -1227,8 +1180,6 @@ class TestOnnxOps(unittest.TestCase):
     test_one_matmul((3,), (3, 1))
     test_one_matmul((1, 3), (3,))
     test_one_matmul((3,), (3,))
-
-
 
   def test_batch_matmul(self):
     def verify_batch_matmul(a_shape, b_shape, out_shape):
@@ -1270,7 +1221,6 @@ class TestOnnxOps(unittest.TestCase):
       (2, 3, 4, 4),
     )
 
-
   @unittest.skip("TODO: NotImplementedError: op_type MatMulInteger16")
   def test_matmulinteger16(self):
     def verify_matmulinteger16(a_shape, b_shape, out_shape):
@@ -1310,7 +1260,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_matmulinteger16((2, 3, 5, 3), (2, 3, 3, 5), (2, 3, 5, 5))
     verify_matmulinteger16((2, 7, 3), (3, 7), (2, 7, 7))
     verify_matmulinteger16((2, 3, 4, 3), (3, 4), (2, 3, 4, 4))
-
 
   def verify_simple_dynamic_model(self, a_shape, b_shape):
     """verify_simple_dynamic_model"""
@@ -1352,12 +1301,10 @@ class TestOnnxOps(unittest.TestCase):
     # verify_model(model, [a * 2 for a in a_shape], [b * 2 for b in b_shape])
     # verify_model(model, [a * 3 for a in a_shape], [b * 3 for b in b_shape])
 
-
   def test_batch_matmul_dynamic_model(self):
     self.verify_simple_dynamic_model((2, 3, 4, 3), (2, 3, 3, 4))
     self.verify_simple_dynamic_model((2, 4, 3), (3, 4))
     self.verify_simple_dynamic_model((2, 3, 4, 3), (3, 4))
-
 
   def test_lrn(self):
     def verify_lrn(shape, nsize, dtype, alpha=None, beta=None, bias=None):
@@ -1384,8 +1331,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_lrn((5, 5, 5, 5), 3, "float32")
     verify_lrn((5, 5, 5, 5), 3, "float32", alpha=0.0002, beta=0.5, bias=2.0)
-
-
 
   def test_instance_norm(self):
     def verify_instance_norm(shape, axis=1):
@@ -1419,8 +1364,6 @@ class TestOnnxOps(unittest.TestCase):
     # verify_instance_norm((8, 6, 5))
     # verify_instance_norm((8, 7, 6, 5, 4))
 
-
-
   @unittest.skip("ort invalid graph")
   def test_upsample_nearest(self):
     scale = 2
@@ -1440,8 +1383,6 @@ class TestOnnxOps(unittest.TestCase):
     model = helper.make_model(graph, producer_name="upsample_nearest_test")
     verify_with_ort_with_inputs(model, [in_array])
 
-
-
   @unittest.skip("ort invalid graph")
   def test_upsample_nearest_default(self):
     scale = 2
@@ -1460,8 +1401,6 @@ class TestOnnxOps(unittest.TestCase):
 
     model = helper.make_model(graph, producer_name="upsample_nearest_test")
     verify_with_ort_with_inputs(model, [in_array])
-
-
 
   @unittest.skip("ort invalid graph")
   def test_upsample3d_nearest(self):
@@ -1485,8 +1424,6 @@ class TestOnnxOps(unittest.TestCase):
     # Upsample is deprecated after opset 9
     verify_with_ort_with_inputs(model, [in_array])
 
-
-
   @unittest.skip("ort invalid graph")
   def test_upsample_bilinear(self):
     scale = 2
@@ -1506,50 +1443,47 @@ class TestOnnxOps(unittest.TestCase):
     model = helper.make_model(graph, producer_name="upsample_bilinear_test")
     verify_with_ort_with_inputs(model, [in_array])
 
+  # @unittest.skip("ort invalid graph")
+  # def test_upsample3d_trilinear(self):
+  #   scale = 2
+  #   in_shape = (1, 1, 3, 3, 3)
+  #   out_shape = (1, 1, 3 * scale, 3 * scale, 3 * scale)
+  #   y = helper.make_node("Upsample", ["in", "scales"], ["out"], mode="linear")
+  #   scales = [1.0, 1.0, 2.0, 2.0, 2.0]
+  #   in_array = np.random.uniform(size=in_shape).astype(np.float32)
+  #   out_array = tvm.topi.testing.resize3d_python(
+  #     in_array,
+  #     (scale, scale, scale),
+  #     "NCDHW",
+  #     "linear",
+  #     coordinate_transformation_mode="asymmetric",
+  #   )
 
+  #   ref_array = np.array(scales)
+  #   ref_node = helper.make_node(
+  #     "Constant",
+  #     inputs=[],
+  #     outputs=["scales"],
+  #     value=onnx.helper.make_tensor(
+  #       name="const_tensor",
+  #       data_type=TensorProto.FLOAT,
+  #       dims=ref_array.shape,
+  #       vals=ref_array.flatten().astype(float),
+  #     ),
+  #   )
 
-  @unittest.skip("ort invalid graph")
-  def test_upsample3d_trilinear(self):
-    scale = 2
-    in_shape = (1, 1, 3, 3, 3)
-    out_shape = (1, 1, 3 * scale, 3 * scale, 3 * scale)
-    y = helper.make_node("Upsample", ["in", "scales"], ["out"], mode="linear")
-    scales = [1.0, 1.0, 2.0, 2.0, 2.0]
-    in_array = np.random.uniform(size=in_shape).astype(np.float32)
-    out_array = tvm.topi.testing.resize3d_python(
-      in_array,
-      (scale, scale, scale),
-      "NCDHW",
-      "linear",
-      coordinate_transformation_mode="asymmetric",
-    )
+  #   graph = helper.make_graph(
+  #     [ref_node, y],
+  #     "upsample_trilinear_test",
+  #     inputs=[helper.make_tensor_value_info("in", TensorProto.FLOAT, list(in_shape))],
+  #     outputs=[helper.make_tensor_value_info("out", TensorProto.FLOAT, list(out_shape))],
+  #   )
 
-    ref_array = np.array(scales)
-    ref_node = helper.make_node(
-      "Constant",
-      inputs=[],
-      outputs=["scales"],
-      value=onnx.helper.make_tensor(
-        name="const_tensor",
-        data_type=TensorProto.FLOAT,
-        dims=ref_array.shape,
-        vals=ref_array.flatten().astype(float),
-      ),
-    )
-
-    graph = helper.make_graph(
-      [ref_node, y],
-      "upsample_trilinear_test",
-      inputs=[helper.make_tensor_value_info("in", TensorProto.FLOAT, list(in_shape))],
-      outputs=[helper.make_tensor_value_info("out", TensorProto.FLOAT, list(out_shape))],
-    )
-
-    model = helper.make_model(graph, producer_name="upsample_trilinear_test")
-    # TODO(jwfromm): Trilinear upsampling not supported in 1.0.0 onnxruntime.
-    # Replace topi comparison with verify_with_ort once we update.
-    tinygrad_out = get_tinygrad_output(model, in_array)
-    np.testing.assert_allclose(out_array, tinygrad_out, rtol=1e-5, atol=1e-5)
-
+  #   model = helper.make_model(graph, producer_name="upsample_trilinear_test")
+  #   # TODO(jwfromm): Trilinear upsampling not supported in 1.0.0 onnxruntime.
+  #   # Replace topi comparison with verify_with_ort once we update.
+  #   tinygrad_out = get_tinygrad_output(model, in_array)
+  #   np.testing.assert_allclose(out_array, tinygrad_out, rtol=1e-5, atol=1e-5)
 
   def test_softmax(self):
     def verify_softmax(inshape, axis,dynamic=False):
@@ -1599,8 +1533,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_softmax((1, 10), -1, dynamic=True)
     verify_softmax((1, 2, 3, 10), -1, dynamic=True)
 
-
-
   def test_forward_min(self):
     def verify_min(input_dim):
       dtype = "float32"
@@ -1627,8 +1559,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_min((1, 3, 20, 20))
     verify_min((20, 20))
-
-
 
   def test_forward_max(self):
     def verify_max(input_dim):
@@ -1657,8 +1587,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_max((1, 3, 20, 20))
     verify_max((20, 20))
 
-
-
   def test_forward_mean(self):
     def verify_mean(input_dim):
       dtype = "float32"
@@ -1686,8 +1614,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_mean((1, 3, 20, 20))
     verify_mean((20, 20))
 
-
-
   def test_forward_hardsigmoid(self):
     def verify_hardsigmoid(input_dim, alpha, beta):
       dtype = "float32"
@@ -1710,7 +1636,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_hardsigmoid((1, 3, 20, 20), 0.5, 0.6)
     verify_hardsigmoid((20, 20), 0.3, 0.4)
-
 
   def test_forward_arg_min_max(self):
     def verify_argreduce(input_dim, op_name, axis=None, keepdims=None):
@@ -1753,8 +1678,6 @@ class TestOnnxOps(unittest.TestCase):
         verify_argreduce([3, 4, 4], "ArgMin", axis, keepdims)
         verify_argreduce([3, 4, 4], "ArgMax", axis, keepdims)
 
-
-
   def test_constantofshape(self):
     def verify_constantofshape(input_dim, value, dtype):
       fill_node = helper.make_node(
@@ -1786,8 +1709,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_constantofshape((2, 3, 4, 5), 10, "float32")
     verify_constantofshape((3, 3), 0, "int32")
     verify_constantofshape((1, 2, 3), -1, "float32")
-
-
 
   @unittest.skip("ort invalid graph")
   def test_pad(self):
@@ -1913,9 +1834,6 @@ class TestOnnxOps(unittest.TestCase):
 
     verify_pad_constant_value("")
 
-
-
-
   def test_all_reduce_funcs(self):
     def verify_reduce_func(func, data, axis, keepdims, rtol=1e-5, atol=1e-5):
       inshape = data.shape
@@ -1981,7 +1899,6 @@ class TestOnnxOps(unittest.TestCase):
         # verify_reduce_func(
         #   func, np.random.randn(1, 3, 4, 1).astype(np.float32), axis=(1,), keepdims=keepdims
         # )
-
 
   @unittest.skip("ort invalid graph")
   def test_split(self):
@@ -2067,8 +1984,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_split([[1.0, 2.0]], [[1.0, 2.0]], [2], 1)
     verify_split([[1.0, 2.0]], [[1.0, 2.0]], [1], 0)
 
-
-
   def test_binary_ops(self):
     in_shape = (1, 2, 3, 3)
     dtype = "float32"
@@ -2118,8 +2033,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_binary_ops("Equal", x, y, "bool")
     verify_binary_ops("Equal", x, z_array, "bool")
 
-
-
   def test_unary_ops(self):
     in_shape = (1, 2, 3, 3)
     _ = "float32"
@@ -2168,8 +2081,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_unary_ops("Sigmoid", x, rtol=1e-3, atol=1e-3)
     verify_unary_ops("Softsign", x)
 
-
-
   def test_leaky_relu(self):
     def leaky_relu_x(x, alpha):
       return np.where(x >= 0, x, x * alpha)
@@ -2185,8 +2096,6 @@ class TestOnnxOps(unittest.TestCase):
       rtol=2e-3, atol=2e-3
     )
 
-
-
   def test_elu(self):
     def elu_x(x, alpha):
       return np.where(x > 0, x, alpha * (np.exp(x) - 1.0))
@@ -2194,8 +2103,6 @@ class TestOnnxOps(unittest.TestCase):
     self._test_onnx_op_elementwise(
       (2, 4, 5, 6), elu_x, {"alpha": 0.25}, "float32", "Elu", {"alpha": 0.25}
     )
-
-
 
   def test_selu(self):
     def selu_x(x, alpha, gamma):
@@ -2210,15 +2117,12 @@ class TestOnnxOps(unittest.TestCase):
       {"alpha": 0.25, "gamma": 0.3},
     )
 
-
   @unittest.skip("ort invalid graph")
   def test_mish(self):
     def mish_x(x):
       return x * np.tanh(np.log1p(np.exp(x)))
 
     self._test_onnx_op_elementwise((2, 4, 5, 6), mish_x, {}, "float64", "Mish", {})
-
-
 
   def test_prelu(self):
     def verify_prelu(x_shape, a_shape):
@@ -2247,8 +2151,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_prelu([2, 12, 16, 16], [1])  # Test alpha broadcasting.
     verify_prelu([3, 1], [3, 1])  # Test non NCHW workload.
 
-
-
   def test_thresholded_relu(self):
     def thresholded_relu_x(x, alpha):
       out_np = np.clip(x, alpha, np.inf)
@@ -2263,8 +2165,6 @@ class TestOnnxOps(unittest.TestCase):
       "ThresholdedRelu",
       {"alpha": 0.25},
     )
-
-
 
   def test_logsoftmax(self):
     def log_softmax_python(a_np, axis=1):
@@ -2283,15 +2183,11 @@ class TestOnnxOps(unittest.TestCase):
       {"axis": 1},
     )
 
-
-
   def test_sign(self):
     def sign_x(x):
       return np.sign(x)
 
     self._test_onnx_op_elementwise((3, 4, 5, 6), sign_x, {}, "float32", "Sign", {})
-
-
 
   def test_not(self):
     def verify_not(indata, dtype):
@@ -2319,8 +2215,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_not(indata=(np.random.randn(3, 4, 5) > 0), dtype=bool)
     # 4d
     verify_not(indata=(np.random.randn(3, 4, 5, 6) > 0), dtype=bool)
-
-
 
   def test_and(self):
     def verify_and(indata, dtype):
@@ -2372,8 +2266,6 @@ class TestOnnxOps(unittest.TestCase):
     y = np.random.randn(4, 5) > 0
     verify_and(indata=[x, y], dtype=bool)
 
-
-
   def test_tile(self):
     def verify_tile_v6(indata, repeats, outdata):
       node = helper.make_node("Tile", inputs=["input", "repeats"], outputs=["out"])
@@ -2397,8 +2289,6 @@ class TestOnnxOps(unittest.TestCase):
     z_array = np.tile(x, repeats)
     verify_tile_v6(x, repeats, z_array)
 
-
-
   # TODO: remove scipy
   def test_erf(self):
     import scipy.special
@@ -2416,8 +2306,6 @@ class TestOnnxOps(unittest.TestCase):
     x = np.random.rand(2, 3, 4, 6).astype(np.float32)
     z_array = scipy.special.erf(x)
     verify_erf(x, z_array)
-
-
 
   def test_where(self):
     def verify_where(condition, x, y, dtype, outdata, dynamic=False):
@@ -2484,8 +2372,6 @@ class TestOnnxOps(unittest.TestCase):
     outdata = np.where(condition, x, y)
     verify_where(condition, x, y, TensorProto.FLOAT, outdata)
 
-
-
   def test_or(self):
     def verify_or(indata, dtype):
       x = indata[0].astype(dtype)
@@ -2536,8 +2422,6 @@ class TestOnnxOps(unittest.TestCase):
     y = np.random.randn(4, 5) > 0
     verify_or(indata=[x, y], dtype=bool)
 
-
-
   def test_batch_norm(self):
     def verify_batch_norm(in_shape):
       batchnorm = onnx.helper.make_node(
@@ -2567,8 +2451,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_batch_norm([16, 3, 24, 24])
     verify_batch_norm([16, 16, 24, 24])
     verify_batch_norm([16, 16, 10, 10])
-
-
 
   def test_batch_norm_dynamic_subgraph(self):
     def verify_batch_norm_dynamic_subgraph(in_shape, o_shape, rtol=1e-5, atol=1e-5):
@@ -2600,8 +2482,6 @@ class TestOnnxOps(unittest.TestCase):
       verify_with_ort(model, inshapes, rtol=rtol, atol=atol)
 
     verify_batch_norm_dynamic_subgraph([16, 16, 10, 10], [160, 160], rtol=1e-3, atol=1e-3)
-
-
 
   def test_conv(self):
     def verify_conv(
@@ -2787,8 +2667,6 @@ class TestOnnxOps(unittest.TestCase):
         repeat(1, dims),
         group=3,
       )
-
-
 
   # TODO: this is pretty slow...
   def test_convtranspose(self):
@@ -3054,7 +2932,6 @@ class TestOnnxOps(unittest.TestCase):
       auto_pad="SAME_LOWER",
     )
 
-
   # TODO: 2D numerical innacuracy but fine for 3D?
   def test_pooling(self):
     def verify_pooling(x_shape, kernel_shape, strides, pads, out_shape, mode, auto_pad="NOTSET", rtol=1e-5, atol=1e-5):
@@ -3182,8 +3059,6 @@ class TestOnnxOps(unittest.TestCase):
         rtol=1e-3, atol=1e-3
       )
 
-
-
   def test_global_pooling(self):
     def verify_global_pooling(x_shape, mode, rtol=1e-5, atol=1e-5):
       out_shape = x_shape[:2] + [1] * (len(x_shape) - 2)
@@ -3222,7 +3097,6 @@ class TestOnnxOps(unittest.TestCase):
       # 3D Pooling (NCDHW)
       verify_global_pooling([1, 8, 6, 8, 8], mode)
       verify_global_pooling([4, 1, 2, 6, 4], mode)
-
 
   @unittest.skip("TODO: add fmod attribute")
   def test_mod(self):
@@ -3273,8 +3147,6 @@ class TestOnnxOps(unittest.TestCase):
     # )
     # verify_mod(x_shape=[1, 32, 32, 32], y_shape=[1, 32, 32, 32], fmod=1, out_shape=(1, 32, 32, 32))
 
-
-
   def test_xor(self):
     def verify_xor(x_shape, y_shape):
       x_np = np.random.choice(a=[False, True], size=x_shape).astype("bool")
@@ -3303,7 +3175,6 @@ class TestOnnxOps(unittest.TestCase):
 
     # Xor broadcast
     verify_xor(x_shape=[1, 32, 32], y_shape=[1, 1, 32])
-
 
   @unittest.skip("TODO: NotImplementedError: op_type MaxRoiPool not supported")
   def test_max_roi_pool(self):
@@ -3349,7 +3220,6 @@ class TestOnnxOps(unittest.TestCase):
       spatial_scale=2.0,
       out_shape=[4, 3, 2, 2],
     )
-
 
   @unittest.skip("NotImplementedError: op_type LpPool not supported")
   def test_lppool(self):
@@ -3484,7 +3354,6 @@ class TestOnnxOps(unittest.TestCase):
       out_shape=[1, 1, 32, 32],
     )
 
-
   def verify_global_lppool(self, x_shape, p, out_shape):
     """verify_global_lppool"""
     pool_node = helper.make_node(
@@ -3503,8 +3372,6 @@ class TestOnnxOps(unittest.TestCase):
 
     model = helper.make_model(graph, producer_name="global_lppool_test")
     verify_with_ort(model, [x_shape])
-
-
 
   @unittest.skip("NotImplementedError")
   def test_global_lppool(self):
@@ -3525,7 +3392,6 @@ class TestOnnxOps(unittest.TestCase):
     self.verify_global_lppool(
       x_shape=[1, 15, 3, 32, 32], p=2, out_shape=[1, 15, 1, 1, 1]
     )
-
 
   def verify_rnn(
     self,
@@ -3558,7 +3424,7 @@ class TestOnnxOps(unittest.TestCase):
       raise NotImplementedError(f"{rnn_type} RNNs not yet supported.")
 
     if directions not in [1, 2]:
-      raise ValueError(f"Direction should be either 1 or 2 (for bidirectional LSTMs)")
+      raise ValueError("Direction should be either 1 or 2 (for bidirectional LSTMs)")
 
     def get_inputs():
       input_names = []
@@ -3669,7 +3535,7 @@ class TestOnnxOps(unittest.TestCase):
 
       return output_names, graph_outputs, output_shapes
 
-    output_names, graph_outputs, output_shapes = get_outputs()
+    output_names, graph_outputs, _ = get_outputs()
 
     rnn_node = helper.make_node(
       rnn_type, inputs=input_names, outputs=output_names, hidden_size=hidden_size
@@ -3700,7 +3566,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_with_ort_with_inputs(
       model, input_values, atol=atol, rtol=rtol
     )
-
 
   def verify_rnn_helper(self, rnn_type):
     num_activations = 1
@@ -3885,7 +3750,6 @@ class TestOnnxOps(unittest.TestCase):
           directions=directions,
         )
 
-
   @unittest.skip("NotImplementedError: op_type RNN not supported")
   def test_rnn(self):
     self.verify_rnn_helper("RNN")
@@ -3897,8 +3761,6 @@ class TestOnnxOps(unittest.TestCase):
   @unittest.skip("NotImplementedError: op_type GRU not supported")
   def test_gru(self):
     self.verify_rnn_helper("GRU")
-
-
 
   def test_resize(self):
     def verify(ishape, oshape, scales, mode, coord_trans="asymmetric", alpha=0.5, exclude=False, rtol=1e-5, atol=1e-5):
@@ -4036,7 +3898,6 @@ class TestOnnxOps(unittest.TestCase):
     # TODO: ort invalid graph
     # verify_opset_10([1, 16, 32, 32], [1, 1, 2, 2], "nearest")
     # verify_opset_10([1, 16, 32, 32], [1, 1, 0.5, 0.5], "linear")
-
 
   # TODO: weird ops not implemented
   #   def test_nonzero(self):
@@ -4682,8 +4543,6 @@ class TestOnnxOps(unittest.TestCase):
   #     verify_if(num_nested=2, cond=True)
   #     verify_if(num_nested=2, cond=False)
 
-
-
   def test_size(self):
     def verify_size(indata):
       node = helper.make_node(
@@ -4710,8 +4569,6 @@ class TestOnnxOps(unittest.TestCase):
 
     input_data = np.array([[3, 0, 0], [0, 4, 0], [5, 6, 0]], dtype=np.int64)
     verify_size(input_data)
-
-
 
   def test_maxunpool(self):
     def verify_maxunpool(data, indices, kernel_shape, strides, output_shape=None, pads=None):
@@ -4793,8 +4650,6 @@ class TestOnnxOps(unittest.TestCase):
     # pads = np.asarray([1, 1, 1, 1]).astype(np.int64)
     # verify_maxunpool(x_t, x_i, [2, 2], strides=[2, 2], pads=pads)
 
-
-
   def test_softplus(self):
     def verify_softplus(indata):
       node = helper.make_node(
@@ -4822,8 +4677,6 @@ class TestOnnxOps(unittest.TestCase):
     # More fancy case.
     input_data = np.random.randn(1, 32, 32, 3).astype("float32")
     verify_softplus(input_data)
-
-
 
   def test_cumsum(self):
     def verify_cumsum(indata, axis, exclusive=0, reverse=0, dtype="float32"):
@@ -4902,8 +4755,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_cumsum(data, 1, 0, 1, dtype="int32")
     verify_cumsum(data, 1, 1, 1, dtype="int32")
 
-
-
   def test_eyelike(self):
     def verify_eyelike(indata, dynamic=False):
       node_list = []
@@ -4944,7 +4795,6 @@ class TestOnnxOps(unittest.TestCase):
     input_data = np.zeros((5, 5), dtype=np.float32)
     verify_eyelike(input_data)
     verify_eyelike(input_data, True)
-
 
   #   # The following parametrized tests loads the tests that ONNX ships as
   #   # serialized ONNX files, inputs, and outputs. The goal of this test
@@ -5251,8 +5101,6 @@ class TestOnnxOps(unittest.TestCase):
   # #     verify_embedding_bag(10, 3, [2, 10])
   # #     verify_embedding_bag(32, 2, [3, 3])
 
-
-
   # #   def test_reverse_sequence(self):
   # #     def verify_reverse_sequence(x, sequence_lens, batch_axis, time_axis):
   # #       node = onnx.helper.make_node(
@@ -5287,7 +5135,6 @@ class TestOnnxOps(unittest.TestCase):
   # #
   # #     sequence_lens = np.array([4, 3, 2, 1], dtype=np.int64)
   # #     verify_reverse_sequence(x, sequence_lens, 1, 0)
-
 
   def _test_gelu(self, data_type, op_name):
     dtype = np.dtype(data_type)
@@ -5326,7 +5173,6 @@ class TestOnnxOps(unittest.TestCase):
   def test_fastgelu(self):
     self._test_gelu("float16", "FastGelu")
     self._test_gelu("float32", "FastGelu")
-
 
   def _test_biasgelu(self, data_type, op_name):
     dtype = np.dtype(data_type)
@@ -5374,8 +5220,6 @@ class TestOnnxOps(unittest.TestCase):
   def test_fastbiasgelu(self):
     self._test_biasgelu("float16", "FastGelu")
     self._test_biasgelu("float32", "FastGelu")
-
-
 
   def test_embedlayernormalization(self):
     def verify_embedlayernormalization(
@@ -5476,8 +5320,6 @@ class TestOnnxOps(unittest.TestCase):
     verify_embedlayernormalization(
       input_ids, None, word_embedding, position_embedding, None, gamma, beta
     )
-
-
 
   @unittest.skip("TODO: failing")
   def test_attention(self):
@@ -5580,9 +5422,6 @@ class TestOnnxOps(unittest.TestCase):
           )
           verify_attention(unidirectional, input_array, weight, bias, mask_index, past)
 
-
-
-
   def test_skiplayernormalization(self):
     def verify_skiplayernormalization(input_, skip, gamma, beta, bias):
       node = onnx.helper.make_node(
@@ -5626,8 +5465,6 @@ class TestOnnxOps(unittest.TestCase):
     bias = np.random.randn(hidden_size).astype(dtype)
 
     verify_skiplayernormalization(input_array, skip, gamma, beta, bias)
-
-
 
   def test_bitwise(self):
     def verify_bitwise_ops(A_shape, B_shape, C_shape, D_shape, high=128, in_dtype="int32"):
@@ -5710,8 +5547,6 @@ class TestOnnxOps(unittest.TestCase):
       verify_bitwise_ops(shape, shape, shape, shape, high, dtype)
       # Bitwise test with broadcasting
       verify_bitwise_ops(shape, broadcast_shape, broadcast_shape, broadcast_shape, high, dtype)
-
-
 
   #   def test_scan(self):
   #     def verify_scan(
@@ -6126,8 +5961,6 @@ class TestOnnxOps(unittest.TestCase):
   #     )
   #
   #     verify_with_ort_with_inputs(model, [])
-
-
 
   #   class TestSetSpan:
   #     """test structural equal between translated / hand-crafted relay IR with span tagged."""
@@ -7201,7 +7034,6 @@ class TestOnnxQuantizedOps(unittest.TestCase):
   #     verify_qlinearsoftmax([5])
   #     verify_qlinearsoftmax([3, 4, 5])
 
-
   #   def test_random_bernoulli(self):
   #     def _get_tinygrad_output(inputs, out_dtype="int32", seed=None):
   #       def get_bernoulli_model(shape, in_dtype="float32", out_dtype="int32", seed=None):
@@ -7762,7 +7594,6 @@ class TestOnnxQuantizedOps(unittest.TestCase):
   #     # Bitwise test with broadcasting
   #     verify_bitshift(shape, broadcast_shape)
 
-
   # def test_qattention(self):
   #   def verify_attention(
   #     _unidirectional,
@@ -7944,10 +7775,6 @@ class TestOnnxQuantizedOps(unittest.TestCase):
   #         )
 
 
-
-
-
-
 import torch
 from torch.nn import Linear, Module, Sequential
 
@@ -8079,11 +7906,6 @@ class TestOnnxTorchConverter(unittest.TestCase):
 
   # def test_shufflenetv2(self):
   #   self.check_torch_conversion(torchvision.models.shufflenetv2, (1,3,224,224))
-
-
-
-
-
 
   ...
 if __name__ == "__main__":
