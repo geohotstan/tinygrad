@@ -17,7 +17,7 @@ from onnxruntime.quantization import CalibrationDataReader, quantize_static
 from onnxruntime.capi.onnxruntime_pybind11_state import InvalidArgument
 
 # NOTES:
-# if Constant op node leads to a node with to_python_const, we can just skip tensor. Hmmmmm
+# if Constant op node or something in initializer leads to a node with to_python_const, we can skip the to_python_const.
 
 def make_constant_node(name, data_type, dims, vals):
   return helper.make_node("Constant", inputs=[], outputs=[name], value=helper.make_tensor(name=name, data_type=data_type, dims=dims, vals=vals))
