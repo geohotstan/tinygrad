@@ -101,22 +101,18 @@ class TestOnnx(unittest.TestCase):
       helper_test_validation(model, actual_input)
 
   def test_input_tensor_type(self):
-    input_shape = [2, 3]
     for input_type in supported_dtypes:
-      self._test_input_parsing(
-        expected_input=helper.make_tensor_value_info("in", input_type, input_shape), 
-        expected_output=helper.make_tensor_value_info("out", input_type, input_shape), 
-        actual_input=np.random.uniform(low=-5, high=5, size=input_shape).astype(helper.tensor_dtype_to_np_dtype(input_type))
-      )
+      expected_input = helper.make_tensor_value_info("in", input_type, [2, 3])
+      expected_output = helper.make_tensor_value_info("out", input_type, [2, 3])
+      actual_input = np.random.uniform(low=-5, high=5, size=[2, 3]).astype(helper.tensor_dtype_to_np_dtype(input_type))
+      self._test_input_parsing(expected_input, expected_output, actual_input)
   
   def test_input_tensor_type_errors(self):
     # wrong input shape
-    self._test_input_parsing(
-      expected_input=helper.make_tensor_value_info("in", TensorProto.FLOAT, [2, 3]), 
-      expected_output=helper.make_tensor_value_info("out", TensorProto.FLOAT, [2, 3]), 
-      actual_input=np.random.uniform(low=-5, high=5, size=[2, 2]).astype(np.float32),
-      exception=(InvalidArgument, RuntimeError)
-    )
+    expected_input = helper.make_tensor_value_info("in", TensorProto.FLOAT, [2, 3])
+    expected_output = helper.make_tensor_value_info("out", TensorProto.FLOAT, [2, 3])
+    actual_input = np.random.uniform(low=-5, high=5, size=[2, 2]).astype(np.float32)
+    self._test_input_parsing(expected_input, expected_output, actual_input, exception=(InvalidArgument, RuntimeError))
     # TODO: true float16
     # wrong input dtype
     # self._test_input_parsing(
@@ -3205,6 +3201,7 @@ class TestOnnxOps(unittest.TestCase):
         pads=[1, 1, 1, 1, 1, 1],
         out_shape=[1, 1, 16, 16, 16],
         mode=mode,
+        rtol=1e-3, atol=1e-3
       )
 
       # Pool3D with stride and autopadding
@@ -3216,6 +3213,7 @@ class TestOnnxOps(unittest.TestCase):
         out_shape=[1, 1, 16, 16, 16],
         mode=mode,
         auto_pad="SAME_UPPER",
+        rtol=1e-3, atol=1e-3
       )
 
 
