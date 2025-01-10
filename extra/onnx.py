@@ -35,7 +35,9 @@ DTYPE_MAP: dict[int, DType] = {
 }
 def dtype_parse(onnx_dtype: int) -> DType:
   if onnx_dtype not in DTYPE_MAP: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return DTYPE_MAP[onnx_dtype] if is_dtype_supported(DTYPE_MAP[onnx_dtype]) else dtypes.float
+  dtype = DTYPE_MAP[onnx_dtype]
+  # webgpu hack
+  return dtype if is_dtype_supported(dtype) else (dtypes.float if dtypes.is_float(dtype) else dtypes.int)
 
 # src: onnx/onnx_ml_pb2.pyi
 ATTRIBUTE_MAP: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {

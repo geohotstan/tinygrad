@@ -192,7 +192,6 @@ def _auto_pad(pads, auto_pad: AUTO_PAD_OPTIONS):
 
 def Pad(x:Tensor, pads:list[int], constant_value:ConstType|None=None, axes:list[int]|None=None,
         mode:Literal["constant", "reflect", "edge", "wrap"]="constant", value=0):
-  pads = list(map(int, pads))  # webgpu hack
   value = constant_value or value
   axes = axes or list(range(x.ndim))
   real_pads = [0] * (x.ndim*2)
