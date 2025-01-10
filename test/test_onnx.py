@@ -726,7 +726,6 @@ class TestOnnxOps(unittest.TestCase):
       0,
       "mul",
     )
-    # TODO(vvchernov): min and max options are supported from 18 version, but CI supports 17 only
     # # Scatter elements with min reduction of duplicates
     # verify_scatter_elements(
     #   (3, 3, 3),
@@ -1480,7 +1479,6 @@ class TestOnnxOps(unittest.TestCase):
   #   )
 
   #   model = helper.make_model(graph, producer_name="upsample_trilinear_test")
-  #   # TODO(jwfromm): Trilinear upsampling not supported in 1.0.0 onnxruntime.
   #   # Replace topi comparison with verify_with_ort once we update.
   #   tinygrad_out = get_tinygrad_output(model, in_array)
   #   np.testing.assert_allclose(out_array, tinygrad_out, rtol=1e-5, atol=1e-5)
@@ -1921,7 +1919,6 @@ class TestOnnxOps(unittest.TestCase):
           inputs.append(
             helper.make_tensor_value_info("split", TensorProto.INT64, list(np_split.shape))
           )
-          # TODO(mbrookhart): Support dynamic split, edit this test case to remove split from
           # the initializer and add it back to the input data
           indata = [indata]  # , np_split]
           initializer.append(
@@ -2643,7 +2640,6 @@ class TestOnnxOps(unittest.TestCase):
         repeat(2, dims),
       )
 
-    # TODO(jwfromm): Merge with other tests once group_conv3d is supported.
     for dims in [1, 2, 3]:
       # Group Convolution
       verify_conv(
@@ -4432,8 +4428,6 @@ class TestOnnxOps(unittest.TestCase):
   #         cond = np.array(1).astype("bool")
   #       correct_out = then_expected if cond else else_expected
   #
-  #       # TODO(jwfromm): Onnxruntime 1.0.0 is buggy with If statements. Replace this with
-  #       # verify_with_ort once we update versions.
   #       tinygrad_out = get_tinygrad_output(if_model, [cond])
   #       if not isinstance(tinygrad_out, list):
   #         tinygrad_out = [tinygrad_out]
@@ -5282,8 +5276,6 @@ class TestOnnxOps(unittest.TestCase):
 
       model = helper.make_model(graph, producer_name="embedlayernormalization_test")
 
-      # TODO(@anwang2009): onnxruntime v1.9.0 requires empty list for optional argument,
-      # but v1.10.0+ requires None instead.
       verify_with_ort_with_inputs(
         model,
         [
@@ -6847,11 +6839,9 @@ class TestOnnxQuantizedOps(unittest.TestCase):
   #     # Default matmul both ranks = 2 (x_dtype = "int8", w_dtype = "int8")
   #     verify_qlinearmatmul((2, 3), (3, 2), (2, 2), "int8", "int8")
   #
-  #     # TODO(vvchernov): problems on ONNX Runtime side and type check (onnx.py:L4763) on TVM side
   #     # Default matmul both ranks = 2 (x_dtype = "uint8", w_dtype = "int8")
   #     # verify_qlinearmatmul((2, 3), (3, 2), (2, 2), "uint8", "int8")
   #
-  #     # TODO(vvchernov): problems on ONNX Runtime side and type check (onnx.py:L4763) on TVM side
   #     # Default matmul both ranks = 2 (x_dtype = "int8", w_dtype = "uint8")
   #     # verify_qlinearmatmul((2, 3), (3, 2), (2, 2), "int8", "uint8")
   #
