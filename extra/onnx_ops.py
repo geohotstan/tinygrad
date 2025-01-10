@@ -353,8 +353,8 @@ def Resize(X:Tensor, roi:list[float]|None=None, scales:list[float]|None=None, si
       scale_fxn = min if keep_aspect_ratio_policy == "not_larger" else max
       scales = [scale_fxn([sizes[i] / input_shape[i] for i in range(len(input_shape)) if i+2 in axes])] * 2
       sizes = [int((scales[0] * input_shape[i]) + 0.5) if i+2 in axes else input_shape[i] for i in range(X.ndim-2)]
-    else: 
-      scales = [size / input_shape for size, input_shape in zip(sizes, input_shape)] 
+    else:
+      scales = [size / input_shape for size, input_shape in zip(sizes, input_shape)]
   else:
     sizes = [int(sc*sh) for sc, sh in zip(scales, input_shape)]
   regions = [[st, ed] for st, ed in zip(roi, roi[len(roi)//2:])] if isinstance(roi, list) and roi else [[0.0, 0.0]] * (X.ndim-2)
