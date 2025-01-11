@@ -124,6 +124,7 @@ class TestOnnxQuantizedOps(unittest.TestCase):
     }
     attributes = {"channels_last": 0}
     outputs = {"Y": ([1,3,1,1], np.uint8)}
+    assert False
     helper_test_single_op("QLinearGlobalAveragePool", inputs, attributes, outputs, domain=CONTRIB_OPERATORS)
 
 if __name__ == "__main__":
