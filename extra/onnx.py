@@ -35,7 +35,9 @@ DTYPE_MAP: dict[int, DType] = {
 }
 def dtype_parse(onnx_dtype: int) -> DType:
   if onnx_dtype not in DTYPE_MAP: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return DTYPE_MAP[onnx_dtype] if is_dtype_supported(DTYPE_MAP[onnx_dtype]) else dtypes.float
+  dtype = DTYPE_MAP[onnx_dtype]
+  # webgpu hack
+  return dtype if is_dtype_supported(dtype) else (dtypes.float if dtypes.is_float(dtype) else dtypes.int)
 
 # src: onnx/onnx_ml_pb2.pyi
 ATTRIBUTE_MAP: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
@@ -56,6 +58,7 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
              list(onnx_tensor.uint64_data):
     if len(data) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
+  if not onnx_tensor.HasField("raw_data"): return Tensor(None)
   assert onnx_tensor.HasField("raw_data")
   np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
   if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
@@ -98,7 +101,7 @@ def get_run_onnx(onnx_model: ModelProto):
   def prepare_input(user_input:Any, model_input:ValueInfoProto):
     type_proto = model_input.type
     if type_proto.HasField("optional_type"):
-      if user_input is None: return Tensor(None)
+      if user_input is None: return None
       type_proto = type_proto.optional_type.elem_type
     if type_proto.HasField("sequence_type"):
       if not isinstance(user_input, Sequence): raise RuntimeError(f"{model_input.name} received {user_input}, expected sequence type")
@@ -116,7 +119,7 @@ def get_run_onnx(onnx_model: ModelProto):
       # if dtype is not tensor.dtype: raise RuntimeError(f"{model_input.name} has mismatch for dtype. Expected {dtype}, received {tensor.dtype}.")
       for dim, onnx_dim in enumerate(type_proto.tensor_type.shape.dim):
         dim_param, dim_value = onnx_dim.dim_param, onnx_dim.dim_value
-        user_dim_input = user_input.shape[dim]
+        user_dim_input = tensor.shape[dim]
         if dim_param: dim_value = variable_dims[dim_param] if dim_param in variable_dims else variable_dims.setdefault(dim_param, user_dim_input)
         if user_dim_input != dim_value:
           raise RuntimeError(f"{model_input.name} has mismatch for dim={dim_param or dim}. Expected {dim_value}, received {user_dim_input}.")
@@ -127,13 +130,14 @@ def get_run_onnx(onnx_model: ModelProto):
   def run_onnx(inputs={}, debug=0):
     debug = getenv("DEBUGONNX") or debug
     if debug >= 3: print("Model initialization data:\n" + "\n".join(f"\t{i.name} - {model_tensors[i.name]}" for i in onnx_model.graph.initializer))
+    if debug >= 3: print("User input:\n\t", inputs)
 
     if debug >= 1: print("Model input:")
     for name, value_info in model_expected_inputs.items():
-      if name not in inputs: raise RuntimeError(f"Please provide input data for {name}")
+      if debug >= 1: print(f"\t{name} - {MessageToDict(value_info.type)}")
+      if name not in inputs: raise RuntimeError(f"Please provide input data for '{name}'")
       model_tensors[name] = prepare_input(inputs[name], value_info)
-      if debug >= 1: print(f"\t{name} - {model_tensors[name]}")
-      if debug >= 2: print(f"\t\t{MessageToDict(value_info.type)}")
+      if debug >= 2: print(f"\t\tparsed: {model_tensors[name]}")
 
     for num,n in enumerate(onnx_model.graph.node):
       inp_tensors = [model_tensors.get(x) for x in n.input]
