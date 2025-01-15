@@ -361,17 +361,6 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def cast(self, dtype:DType, bitcast=False):
     if bitcast: return self.bitcast(dtype)
     if self._device is not None and self._device.startswith("DISK"): raise RuntimeError("CAST isn't supported on DISK")
-    if getenv("CAST_BEFORE_VIEW", 1) and dtype.itemsize <= self.dtype.itemsize and self is not self.base:
-      # NOTE: we have to apply the movementops here, we can't use VIEW (yet)
-      # TODO: move this to the scheduler
-      ret = self.base.cast(dtype, bitcast)
-      op_arg = []
-      mop = self
-      while mop is not self.base:
-        op_arg.append((mop.op, mop.arg))
-        mop = mop.src[0]
-      for op,arg in reversed(op_arg): ret = UOp(op, ret.dtype, (ret,), arg)
-      return ret
     return UOp(Ops.CAST, dtype, (self,))
   def bitcast(self, dtype:DType):
     if self.st is not None and self.shape and ((self.shape[-1]*self.dtype.itemsize)%dtype.itemsize != 0):
@@ -440,7 +429,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   # *** from LazyBuffer ***
 
   @staticmethod
-  def metaop(op:Ops, shape:tuple[sint, ...], dtype:DType, device:str, arg=None, src:tuple[UOp, ...]=()) -> UOp:
+  def metaop(op:Ops, shape:tuple[sint, ...], dtype:DType, device:str, arg=None) -> UOp:
     from tinygrad.shape.shapetracker import ShapeTracker
     # Tensor const is CONST(VIEW(DEVICE)) -> RESHAPE -> EXPAND
     if op is Ops.CONST:
@@ -477,13 +466,8 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @property
   def base(self) -> UOp:
     if self.op in GroupOp.Movement: return self.src[0].base
-    return self.src[0] if self.op is Ops.VIEW and len(self.src) == 1 and self.src[0].op is not Ops.BUFFER else self
-  def view(self, new_st:ShapeTracker) -> UOp:
-    if self.st is None: return UOp(Ops.VIEW, self.dtype.base if not isinstance(self.dtype, ImageDType) else self.dtype, (self,), new_st)
-    ret = UOp(Ops.VIEW, self.dtype, (self.base,), new_st)
-    # instant folding rules
-    if new_st.contiguous and self.base.shape == new_st.shape: return self.base
-    return ret
+    return self.src[0].base if self.op is Ops.VIEW and len(self.src) == 1 and self.src[0].op is not Ops.BUFFER else self
+  def view(self, new_st:ShapeTracker) -> UOp: return UOp(Ops.VIEW, self.dtype, (self.base,), new_st)
 
   def _mop(self, op:Ops, arg):
     ret = UOp(op, self.dtype, (self,), arg)
@@ -516,19 +500,18 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def buf_uop_view(self) -> UOp: return self.buf_uop.view(unwrap(self.st))
   @property
   def buffer(self) -> Buffer:
-    if self.base.realized is not None: return self.base.realized
-    if (ret:=buffers.get(self)) is not None: return ret
     if self.op is Ops.VIEW:
       assert unwrap(self.st).contiguous, "VIEW only works here if it's contiguous"
       return self.src[0].buffer
     assert self.op is Ops.BUFFER, f"must be BUFFER {self.op}"
+    if (cret:=buffers.get(self)) is not None: return cret
     from tinygrad.device import Buffer
     buffers[self] = ret = Buffer(self.device, self.size, self.dtype if isinstance(self.dtype, ImageDType) else self.dtype.base)
     return ret
   @property
   def realized(self) -> Optional[Buffer]:
     if self.op is Ops.VIEW and len(self.src) == 1 and self.src[0].op is Ops.BUFFER: return self.src[0].realized
-    return buffers.get(self) if self.op is Ops.BUFFER else None
+    return self.buffer if self.op is Ops.BUFFER else None
   @property
   def is_realized(self) -> bool: return self.base.realized is not None
 
@@ -877,15 +860,15 @@ def launch_viz(env_str:str, data:str):
 # *** simple graph rewrite engine ***
 
 class RewriteContext:
-  def __init__(self, pm, ctx):
+  def __init__(self, pm, ctx=None):
     self.pm: PatternMatcher = pm
     self.ctx = ctx
     self.replace: dict[UOp, UOp] = {}
-  def rewrite(self, n:UOp) -> UOp:
+  def top_down_rewrite(self, n:UOp) -> UOp:
     if (rn := self.replace.get(n)) is not None: return rn
-    new_src = tuple(map(self.rewrite, n.src))
+    new_src = tuple(map(self.top_down_rewrite, n.src))
     new_n = self.pm.rewrite(n, self.ctx) if new_src == n.src else UOp(n.op, n.dtype, new_src, n.arg)
-    self.replace[n] = ret = n if new_n is None else self.rewrite(new_n)
+    self.replace[n] = ret = n if new_n is None else self.top_down_rewrite(new_n)
     return ret
   def bottom_up_rewrite(self, n:UOp) -> UOp:
     if (rn := self.replace.get(n)) is not None: return rn
@@ -898,7 +881,13 @@ class RewriteContext:
 def graph_rewrite(sink:UOp, pm:PatternMatcher, ctx=None, bottom_up=False) -> UOp:
   if TRACK_MATCH_STATS >= 2 and not bottom_up and len(tracked_ctxs) != 0: # TODO: make viz work with bottom_up=True
     tracked_ctxs[-1].append(TrackedGraphRewrite(((frm:=sys._getframe(1)).f_code.co_filename, frm.f_lineno), sink))
-  return RewriteContext(pm, ctx).bottom_up_rewrite(sink) if bottom_up else RewriteContext(pm, ctx).rewrite(sink)
+  return RewriteContext(pm, ctx).bottom_up_rewrite(sink) if bottom_up else RewriteContext(pm, ctx).top_down_rewrite(sink)
+
+def graph_rewrite_map(sink:UOp, pm:PatternMatcher, ctx=None, bottom_up=False) -> dict[UOp, UOp]:
+  if TRACK_MATCH_STATS >= 2 and not bottom_up and len(tracked_ctxs) != 0: # TODO: make viz work with bottom_up=True
+    tracked_ctxs[-1].append(TrackedGraphRewrite(((frm:=sys._getframe(1)).f_code.co_filename, frm.f_lineno), sink))
+  rewrite_ctx = RewriteContext(pm, ctx)
+  return {k:(rewrite_ctx.bottom_up_rewrite(k) if bottom_up else rewrite_ctx.top_down_rewrite(k)) for k in list(sink.toposort)[::-1]}
 
 # ***** uop type spec *****
 
@@ -994,14 +983,13 @@ def split_uop(x:UOp, sep:Ops):
     for s in x.src: yield from split_uop(s, sep)
   else: yield x
 
-def div_and_mod_folding(x: UOp, c: int, which: Literal[Ops.MOD, Ops.IDIV], split_rem: bool=False) -> UOp|None:
-  # simplify x // c or x % c, None means no change, c must be > 0
-  assert c > 0
-  if x.dtype.count > 1: return None
+def div_and_mod_folding(x: UOp, y: UOp, which: Literal[Ops.MOD, Ops.IDIV], split_rem: bool=False) -> UOp|None:
+  # simplify x // y or x % y, None means no change
   # simple cancel div/mod case
-  if (q:=x.vmin//c) == (x.vmax//c):
-    if which is Ops.MOD: return x - q*c
-    return x.const_like(q)
+  if y.vmin != 0 != y.vmax and (q:=x.vmin//y.vmin) == x.vmin//y.vmax == x.vmax//y.vmin == x.vmax//y.vmax:
+    return x - q*y if which is Ops.MOD else x.const_like(q)
+
+  if (y.op is not Ops.CONST) or ((c := y.arg) <= 0) or (x.dtype.count > 1): return None
 
   svars, factors, quotients, remainders, gcd, div, const, offset, something_changed = [], [], [], [], c, 1, 0, 0, False
   for u in split_uop(x, Ops.ADD):
@@ -1040,7 +1028,7 @@ def div_and_mod_folding(x: UOp, c: int, which: Literal[Ops.MOD, Ops.IDIV], split
 
   if gcd != 1: something_changed = True
   if not something_changed:
-    if which is Ops.IDIV and (1 < div < c) and (newx:=div_and_mod_folding(x, div, Ops.IDIV)) is not None: return newx//(c//div)
+    if which is Ops.IDIV and (1 < div < c) and (newx:=div_and_mod_folding(x, UOp.const(dtypes.int, div), Ops.IDIV)) is not None: return newx//(c//div)
     return None
   quo, rem = x.const_like(const//c), x.const_like((const%c)//gcd)
   for q,r,f,v in zip(quotients, remainders, factors, svars):
@@ -1260,10 +1248,10 @@ symbolic = symbolic_simple+PatternMatcher([
   # ** div **
   # div folding
   ((UPat.var("x")//UPat.cvar("c") + UPat.cvar("a"))//UPat.cvar("d"), lambda x,c,a,d: (x+a*c)//(c*d)),  # (x//c+a)//d -> (x+a*c)//(c*d)
-  (UPat.var("x", dtypes.sints) // UPat.cvar("c", vec=False), lambda x,c: div_and_mod_folding(x,c.arg,Ops.IDIV) if 0 < c.arg else None),
+  (UPat.var("x", dtypes.sints) // UPat.var("y"), lambda x,y: div_and_mod_folding(x,y,Ops.IDIV)),
   # ** mod **
   # mod folding
-  (UPat.var("x") % UPat.cvar("c", vec=False), lambda x,c: div_and_mod_folding(x,c.arg,Ops.MOD) if 0 < c.arg else None),
+  (UPat.var("x") % UPat.var("y"), lambda x,y: div_and_mod_folding(x,y,Ops.MOD)),
 ])
 
 
@@ -1300,7 +1288,10 @@ ConstLike = Union[ConstType, Variable, tuple[ConstType, ...]]
 
 # *** uop swizzling ***
 
-merge_views = PatternMatcher([(UPat(Ops.VIEW, name="s0").view(name="s1"), lambda s0,s1: s0.replace(arg=s0.st+s1.st))])
+merge_views = PatternMatcher([
+  (UPat(Ops.VIEW, name="s0").view(name="s1"), lambda s0,s1: s0.replace(arg=s0.st+s1.st)),
+  (UPat(Ops.VIEW, name="mv", src=(UPat.var("x"),)), lambda mv,x: x if mv.st.contiguous and x.st is not None and x.shape == mv.shape else None),
+])
 
 # push VIEW to loads
 view_left = merge_views+PatternMatcher([
