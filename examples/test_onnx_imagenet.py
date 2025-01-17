@@ -56,13 +56,13 @@ if __name__ == "__main__":
                       activation_type=QuantType.QInt8, weight_type=QuantType.QInt8,
                       extra_options={"ActivationSymmetric": True})
 
-  run_onnx_jit, input_shapes, input_types = load_onnx_model(fn)
-  t_name, shape = list(input_shapes.items())[0]
-  assert shape[1:] == (3,224,224), f"shape is {shape}"
+  run_onnx = load_onnx_model(fn)
+  t_name, value = list(run_onnx.graph_inputs.items())[0]
+  assert value.shape[1:] == (3,224,224), f"shape is {value.shape}"
 
   hit = 0
   for i,(img,y) in enumerate(imagenet_dataloader()):
-    p = run_onnx_jit(**{t_name:img})
+    p = run_onnx.jit_runner(**{t_name:img})
     assert p.shape == (1,1000)
     t = p.argmax().item()
     hit += y==t

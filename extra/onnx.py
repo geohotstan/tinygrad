@@ -3,7 +3,8 @@ import importlib, functools, dataclasses
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import getenv, DEBUG, all_same
 from tinygrad.dtype import DType, ConstType, dtypes
-from tinygrad.device import is_dtype_supported
+from tinygrad.device import is_dtype_supported, Device
+from tinygrad.engine.jit import TinyJit
 
 # ***** protobuf parsing ******
 from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
@@ -109,7 +110,7 @@ def to_python_const(t:Any, op:str, idx:int) -> list[ConstType]|ConstType|bytes:
 debug = int(getenv("DEBUGONNX", "0"))
 limit = int(getenv("ONNXLIMIT", "-1"))
 class OnnxRunner:
-  def __init__(self, model: ModelProto):
+  def __init__(self, model: ModelProto, jit=True):
     # parse model protobuf
     self.is_training = any(n.HasField("domain") and n.domain == "ai.onnx.preview.training" for n in model.graph.node)
     self.old_training, self.old_no_grad = Tensor.training, Tensor.no_grad
@@ -122,6 +123,8 @@ class OnnxRunner:
                        for num,n in enumerate(model.graph.node))
     self.opset_version = model.opset_import[0].version
     self.variable_dims: dict[str, int] = {}
+
+    self.jit_runner = TinyJit(lambda **kwargs: self({ik:iv.to(Device.DEFAULT) for ik,iv in kwargs.items()}), prune=True) if jit else None
 
     # TODO: move extra.onnx_ops here so we don't have to deal with annoying circular import
     # TODO: clean up opset stuff after moving extra.onnx_ops here
@@ -159,29 +162,6 @@ class OnnxRunner:
       return real_fxn(*inps, **opts)
     raise NotImplementedError(f"{op=} not supported")
 
+  def _runner()
+
   def __call__(self, inputs:dict[str, Any], debug=debug, limit=limit):
-    for name, input_spec in self.graph_inputs.items():
-      if name not in inputs: raise RuntimeError(f"Please provide input data for {name}")
-      self.graph_values[name] = self._parse_input(name, inputs[name], input_spec)
-
-    for node in self.graph_nodes:
-      inps = [to_python_const(self.graph_values.get(name), node.op, i) for i,name in enumerate(node.inputs)]
-      opts = node.opts
-
-      # provide additional opts
-      if node.op == "Split" and 'num_outputs' not in opts: opts['num_outputs'] = len(node.outputs)
-      if node.op == "Gradient": opts['intermediate_tensors'] = self.graph_values
-
-      if debug >= 1: print(f"{node.num}: op '{node.op}' opt {opts}")
-      if debug >= 2 and node.inputs: print("\tinputs:\n" + "\n".join(f"\t\t{x} - {i!r}" for x,i in zip(node.inputs, inps)))
-      ret = self._dispatch_op(node.op, inps, opts)
-      ret = ret if isinstance(ret, tuple) else (ret,)
-      if debug >= 2: print("\toutputs:\n" + "\n".join(f"\t\t{x} - {o!r}" for x,o in zip(node.outputs, ret)))
-
-      self.graph_values.update(dict(zip(node.outputs, ret[:len(node.outputs)], strict=True)))
-
-      if node.num == limit:
-        Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
-        return {name:self.graph_values[name] for name in node.outputs}
-    Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
-    return {name:self.graph_values[name] for name in self.graph_outputs}
