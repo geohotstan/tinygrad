@@ -1,10 +1,10 @@
-import random, sys
+import random, sys, onnx
 import numpy as np
 from extra.datasets.imagenet import get_imagenet_categories, get_val_files, center_crop
-from examples.benchmark_onnx import load_onnx_model
 from PIL import Image
-from tinygrad import Tensor, dtypes
+from tinygrad import Tensor, dtypes, Device, TinyJit
 from tinygrad.helpers import fetch, getenv
+from extra.onnx import OnnxRunner
 
 # works:
 #  ~70% - https://github.com/onnx/models/raw/refs/heads/main/validated/vision/classification/resnet/model/resnet50-v2-7.onnx
@@ -56,9 +56,11 @@ if __name__ == "__main__":
                       activation_type=QuantType.QInt8, weight_type=QuantType.QInt8,
                       extra_options={"ActivationSymmetric": True})
 
-  run_onnx_jit, input_shapes, input_types = load_onnx_model(fn)
-  t_name, shape = list(input_shapes.items())[0]
-  assert shape[1:] == (3,224,224), f"shape is {shape}"
+  onnx_model = onnx.load(fetch(fn))
+  run_onnx = OnnxRunner(onnx_model)
+  run_onnx_jit = TinyJit(lambda **kwargs: next(iter(run_onnx({k:v.to(Device.DEFAULT) for k,v in kwargs.items()}).values())), prune=True)
+  t_name, value = list(run_onnx.graph_inputs.items())[0]
+  assert value.shape[1:] == (3,224,224), f"shape is {value.shape}"
 
   hit = 0
   for i,(img,y) in enumerate(imagenet_dataloader()):

@@ -1,12 +1,12 @@
-from typing import Callable, Any, Sequence
-import importlib, functools, dataclasses
+from typing import Callable, Any, Sequence, IO
+import importlib, functools, dataclasses, os
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import getenv, DEBUG, all_same
 from tinygrad.dtype import DType, ConstType, dtypes
 from tinygrad.device import is_dtype_supported
 
 # ***** protobuf parsing ******
-from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
+from onnx import AttributeProto, TensorProto, TypeProto, helper, load
 import numpy as np
 
 def dtype_parse(onnx_dtype: int) -> DType:
@@ -109,8 +109,8 @@ def to_python_const(t:Any, op:str, idx:int) -> list[ConstType]|ConstType|bytes:
 debug = int(getenv("DEBUGONNX", "0"))
 limit = int(getenv("ONNXLIMIT", "-1"))
 class OnnxRunner:
-  def __init__(self, model: ModelProto):
-    # parse model protobuf
+  def __init__(self, model_path: IO[bytes] | str | os.PathLike):
+    model = load(model_path)
     self.is_training = any(n.HasField("domain") and n.domain == "ai.onnx.preview.training" for n in model.graph.node)
     self.old_training, self.old_no_grad = Tensor.training, Tensor.no_grad
     Tensor.training = True if self.is_training else False

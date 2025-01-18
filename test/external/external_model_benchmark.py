@@ -7,6 +7,7 @@ from onnx.helper import tensor_dtype_to_np_dtype
 import onnxruntime as ort
 from onnx2torch import convert
 from extra.onnx import OnnxRunner
+from extra.onnx_helpers import validate, get_example_input
 from tinygrad.helpers import OSX, DEBUG, fetch
 from tinygrad import Tensor, Device
 from tinygrad.device import CompileError
@@ -50,6 +51,7 @@ def benchmark_model(m, devices, validate_outs=False):
   CSV = {"model": m}
 
   fn = fetch(MODELS[m])
+  # TODO: replace this with OnnxRunner's default parsing when we have true float16
   onnx_model = onnx.load(fn)
   output_names = [out.name for out in onnx_model.graph.output]
   excluded = {inp.name for inp in onnx_model.graph.initializer}
@@ -65,7 +67,7 @@ def benchmark_model(m, devices, validate_outs=False):
     try:
       Device.DEFAULT = device
       inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
-      tinygrad_model = OnnxRunner(onnx_model)
+      tinygrad_model = OnnxRunner(fn)
       benchmark(m, f"tinygrad_{device.lower()}_jitless", lambda: {k:v.numpy() for k,v in tinygrad_model(inputs).items()})
 
       from tinygrad.engine.jit import TinyJit
@@ -111,6 +113,7 @@ def benchmark_model(m, devices, validate_outs=False):
     del ort_sess
 
   if validate_outs:
+    # TODO: replace this with `validate` from extra/onnx_helpers.py once we have true float16
     for device in devices:
       rtol, atol = 2e-3, 2e-3  # tolerance for fp16 models
       Device.DEFAULT = device
