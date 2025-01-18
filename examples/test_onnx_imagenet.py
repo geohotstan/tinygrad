@@ -62,7 +62,7 @@ if __name__ == "__main__":
 
   hit = 0
   for i,(img,y) in enumerate(imagenet_dataloader()):
-    p = run_onnx.jit_runner(**{t_name:img})
+    p = run_onnx(**{t_name:img})
     assert p.shape == (1,1000)
     t = p.argmax().item()
     hit += y==t

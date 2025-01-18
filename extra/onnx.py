@@ -107,10 +107,8 @@ def to_python_const(t:Any, op:str, idx:int) -> list[ConstType]|ConstType|bytes:
   return ret
 
 # ***** runner ******
-debug = int(getenv("DEBUGONNX", "0"))
-limit = int(getenv("ONNXLIMIT", "-1"))
 class OnnxRunner:
-  def __init__(self, model: ModelProto, jit=True):
+  def __init__(self, model: ModelProto, jit=False):
     # parse model protobuf
     self.is_training = any(n.HasField("domain") and n.domain == "ai.onnx.preview.training" for n in model.graph.node)
     self.old_training, self.old_no_grad = Tensor.training, Tensor.no_grad
@@ -124,8 +122,6 @@ class OnnxRunner:
     self.opset_version = model.opset_import[0].version
     self.variable_dims: dict[str, int] = {}
 
-    self.jit_runner = TinyJit(lambda **kwargs: self({ik:iv.to(Device.DEFAULT) for ik,iv in kwargs.items()}), prune=True) if jit else None
-
     # TODO: move extra.onnx_ops here so we don't have to deal with annoying circular import
     # TODO: clean up opset stuff after moving extra.onnx_ops here
     self.onnx_ops_module = importlib.import_module('extra.onnx_ops')
@@ -134,6 +130,17 @@ class OnnxRunner:
       "Asin", "Acos", "Atan", "Relu", "Sigmoid", "MatMul", "Floor", "Ceil", "IsInf", "IsNaN", "Softplus", "HardSwish", "Where", "Mul", "Sinh", "Cosh",
       "Tanh", "Softsign", "Asinh", "Acosh", "Atanh",  "Elu", "Celu", "Selu", "Xor", "Round", "Erf", "Mod")},
     }
+
+    self.debug = int(getenv("DEBUGONNX", "0"))
+    self.limit = int(getenv("ONNXLIMIT", "-1"))
+    # TODO: do we even need realized Tensors jit input and output??
+    # without realizing seems... fine?
+    # TODO:
+    # can't just do this
+    # self.runner = TinyJit(lambda **kwargs: {k:v.realize() for k,v in self._runner(**kwargs).items()}) if jit else self._runner
+    # or else running a non-jitted then a jitted has GlobalCounter.mem_count doubled (few ms slower). WHY?! AAAAAAAAAAA WHY CANT I FIGURE THIS OUT
+    self.jit = jit
+    self.jit_runner = TinyJit(lambda **kwargs: self.runner(**kwargs), prune=True)
 
   def _parse_input(self, name: str, value: Any, spec: OnnxValue):
     if spec.is_optional and value is None: return None
@@ -162,6 +169,31 @@ class OnnxRunner:
       return real_fxn(*inps, **opts)
     raise NotImplementedError(f"{op=} not supported")
 
-  def _runner()
+  def runner(self, **inputs):
+    for name, input_spec in self.graph_inputs.items():
+      if name not in inputs: raise RuntimeError(f"Please provide input data for {name}")
+      self.graph_values[name] = self._parse_input(name, inputs[name], input_spec)
 
-  def __call__(self, inputs:dict[str, Any], debug=debug, limit=limit):
+    for node in self.graph_nodes:
+      inps = [to_python_const(self.graph_values.get(name), node.op, i) for i,name in enumerate(node.inputs)]
+      opts = node.opts
+
+      # provide additional opts
+      if node.op == "Split" and 'num_outputs' not in opts: opts['num_outputs'] = len(node.outputs)
+      if node.op == "Gradient": opts['intermediate_tensors'] = self.graph_values
+
+      if self.debug >= 1: print(f"{node.num}: op '{node.op}' opt {opts}")
+      if self.debug >= 2 and node.inputs: print("\tinputs:\n" + "\n".join(f"\t\t{x} - {i!r}" for x,i in zip(node.inputs, inps)))
+      ret = self._dispatch_op(node.op, inps, opts)
+      ret = ret if isinstance(ret, tuple) else (ret,)
+      if self.debug >= 2: print("\toutputs:\n" + "\n".join(f"\t\t{x} - {o!r}" for x,o in zip(node.outputs, ret)))
+
+      self.graph_values.update(dict(zip(node.outputs, ret[:len(node.outputs)], strict=True)))
+
+      if node.num == self.limit:
+        Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
+        return {name:self.graph_values[name] for name in node.outputs}
+    Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
+    return {name:self.graph_values[name] for name in self.graph_outputs}
+
+  def __call__(self, inputs:dict[str, Any]): return self.jit_runner(**inputs) if self.jit else self.runner(**inputs)
