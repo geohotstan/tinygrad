@@ -3,10 +3,11 @@ import importlib, functools, dataclasses
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import getenv, DEBUG, all_same
 from tinygrad.dtype import DType, ConstType, dtypes
-from tinygrad.device import is_dtype_supported
+from tinygrad.device import is_dtype_supported, Device
+from tinygrad.engine.jit import TinyJit
 
 # ***** protobuf parsing ******
-from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
+from onnx import ModelProto, AttributeProto, TensorProto, ValueInfoProto, helper
 import numpy as np
 
 def dtype_parse(onnx_dtype: int) -> DType:
@@ -51,8 +52,8 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     return Tensor(np_buffer, dtype=dtype)
   return Tensor(None)
 
-def type_parse(onnx_type: TypeProto):
-  elem_type = onnx_type
+def value_info_parse(onnx_value_info: ValueInfoProto):
+  elem_type = onnx_value_info.type
   if elem_type.HasField("map_type") or elem_type.HasField("sparse_tensor_type") or elem_type.HasField("opaque_type"):
     raise NotImplementedError("parsing for map_type, sparse_tensor_type and opaque_type are not implemented")
   if is_optional := elem_type.HasField("optional_type"): elem_type = elem_type.optional_type.elem_type
@@ -60,24 +61,17 @@ def type_parse(onnx_type: TypeProto):
   if elem_type.HasField("tensor_type"):
     shape = tuple(d.dim_param or d.dim_value for d in elem_type.tensor_type.shape.dim)
     dtype = dtype_parse(elem_type.tensor_type.elem_type)
-    return OnnxValue(shape, dtype, is_optional, is_sequence)
-  raise RuntimeError(f"TypeProto was not parsed properly: {onnx_type=}")
+    return OnnxValue(onnx_value_info.name, shape, dtype, is_optional, is_sequence)
+  raise RuntimeError(f"{onnx_value_info.name} was not parsed properly")
 
-# ***** onnx spec *****
-@dataclasses.dataclass(frozen=True)
-class OnnxValue:
-  shape: tuple[str|int]
-  dtype: DType
-  is_optional: bool
-  is_sequence: bool
-
-@dataclasses.dataclass(frozen=True)
-class OnnxNode:
-  num: int
-  op: str
-  inputs: tuple[str]
-  outputs: tuple[str]
-  opts: dict[str, Any]
+def model_parse(onnx_model: ModelProto):
+  is_training = any(n.HasField("domain") and n.domain == "ai.onnx.preview.training" for n in onnx_model.graph.node)
+  graph_buffers = {x.name:buffer_parse(x) for x in onnx_model.graph.initializer}
+  graph_inputs = [value_info_parse(x) for x in onnx_model.graph.input if x.name not in graph_buffers]
+  graph_outputs = [value_info_parse(x) for x in onnx_model.graph.output]
+  graph_nodes = [OnnxNode(n.op_type, tuple(n.input), tuple(n.output), {x.name:attribute_parse(x) for x in n.attribute}) for n in onnx_model.graph.node]
+  opset_version = onnx_model.opset_import[0].version
+  return is_training, opset_version, graph_buffers, graph_inputs, graph_outputs, graph_nodes
 
 # ***** python const *****
 required_input_python_consts: dict[str, tuple[int, ...]] = {
@@ -105,22 +99,32 @@ def to_python_const(t:Any, op:str, idx:int) -> list[ConstType]|ConstType|bytes:
     cache_misses = info.misses
   return ret
 
+# ***** onnx spec *****
+@dataclasses.dataclass
+class OnnxValue:
+  name: str
+  shape: tuple[str | int]
+  dtype: DType
+  is_optional: bool
+  is_sequence: bool
+
+@dataclasses.dataclass
+class OnnxNode:
+  op: str
+  inputs: tuple[OnnxValue]
+  outputs: tuple[OnnxValue]
+  opts: dict[str, Any]
+
 # ***** runner ******
-debug = int(getenv("DEBUGONNX", "0"))
-limit = int(getenv("ONNXLIMIT", "-1"))
 class OnnxRunner:
-  def __init__(self, model: ModelProto):
-    # parse model protobuf
-    self.is_training = any(n.HasField("domain") and n.domain == "ai.onnx.preview.training" for n in model.graph.node)
+  """
+  Tinygrad ONNX Runner
+  """
+  def __init__(self, model:ModelProto, jit=True):
+    self.is_training, self.opset_version, self.graph_values, self.graph_inputs, self.graph_outputs, self.graph_nodes = model_parse(model)
     self.old_training, self.old_no_grad = Tensor.training, Tensor.no_grad
     Tensor.training = True if self.is_training else False
     Tensor.no_grad = False if self.is_training else True
-    self.graph_values = {x.name:buffer_parse(x) for x in model.graph.initializer}
-    self.graph_inputs = {x.name:type_parse(x.type) for x in model.graph.input if x.name not in self.graph_values}
-    self.graph_outputs = {x.name:type_parse(x.type) for x in model.graph.output}
-    self.graph_nodes = tuple(OnnxNode(num, n.op_type, tuple(n.input), tuple(n.output), {x.name:attribute_parse(x) for x in n.attribute})
-                       for num,n in enumerate(model.graph.node))
-    self.opset_version = model.opset_import[0].version
     self.variable_dims: dict[str, int] = {}
 
     # TODO: move extra.onnx_ops here so we don't have to deal with annoying circular import
@@ -132,19 +136,25 @@ class OnnxRunner:
       "Tanh", "Softsign", "Asinh", "Acosh", "Atanh",  "Elu", "Celu", "Selu", "Xor", "Round", "Erf", "Mod")},
     }
 
-  def _parse_input(self, name: str, value: Any, spec: OnnxValue):
+    self.debug = int(getenv("DEBUGONNX", "0"))
+    self.limit = int(getenv("ONNXLIMIT", "-1"))
+
+    self.jit = jit
+    self.jit_runner = TinyJit(self.runner)
+
+  def _parse_input(self, spec: OnnxValue, value: Any):
     if spec.is_optional and value is None: return None
     # TODO: need true float16 for dtype checking
     if spec.is_sequence:
-      if not isinstance(value, Sequence): raise RuntimeError(f"{name} received {value}, expected a sequence type")
-      sequence = [Tensor(v, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(v, Tensor) else v for v in value]
-      if not all_same(tuple(t.shape for t in sequence)): raise RuntimeError(f"Shapes for {name} sequence must be homogeneous")
+      if not isinstance(value, Sequence): raise RuntimeError(f"{spec.name} received {value}, expected a sequence type")
+      sequence = [Tensor(v, dtype=spec.dtype, device=Device.DEFAULT,requires_grad=self.is_training) if not isinstance(v,Tensor) else v for v in value]
+      if not all_same(tuple(t.shape for t in sequence)): raise RuntimeError(f"Shapes for {spec.name} sequence must be homogeneous")
       return sequence
-    tensor = Tensor(value, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(value, Tensor) else value
+    tensor = Tensor(value, dtype=spec.dtype, device=Device.DEFAULT, requires_grad=self.is_training) if not isinstance(value, Tensor) else value
     for dim, (onnx_dim, user_dim_input) in enumerate(zip(spec.shape, tensor.shape, strict=True)):
       if isinstance(onnx_dim, str):
         onnx_dim = self.variable_dims[onnx_dim] if onnx_dim in self.variable_dims else self.variable_dims.setdefault(onnx_dim, int(user_dim_input))
-      if user_dim_input != onnx_dim: raise RuntimeError(f"{name} has mismatch on {dim=}. Expected {onnx_dim}, received {user_dim_input}.")
+      if user_dim_input != onnx_dim: raise RuntimeError(f"{spec.name} has mismatch on {dim=}. Expected {onnx_dim}, received {user_dim_input}.")
     return tensor
 
   def _dispatch_op(self, op, inps, opts):
@@ -159,12 +169,12 @@ class OnnxRunner:
       return real_fxn(*inps, **opts)
     raise NotImplementedError(f"{op=} not supported")
 
-  def __call__(self, inputs:dict[str, Any], debug=debug):
-    for name, input_spec in self.graph_inputs.items():
-      if name not in inputs: raise RuntimeError(f"Please provide input data for {name}")
-      self.graph_values[name] = self._parse_input(name, inputs[name], input_spec)
+  def runner(self, **inputs):
+    for input_spec in self.graph_inputs:
+      if input_spec.name not in inputs: raise RuntimeError(f"Please provide input data for {input_spec.name}")
+      self.graph_values[input_spec.name] = self._parse_input(input_spec, inputs[input_spec.name])
 
-    for node in self.graph_nodes:
+    for num,node in enumerate(self.graph_nodes):
       inps = [to_python_const(self.graph_values.get(name), node.op, i) for i,name in enumerate(node.inputs)]
       opts = node.opts
 
@@ -172,16 +182,21 @@ class OnnxRunner:
       if node.op == "Split" and 'num_outputs' not in opts: opts['num_outputs'] = len(node.outputs)
       if node.op == "Gradient": opts['intermediate_tensors'] = self.graph_values
 
-      if debug >= 1: print(f"{node.num}: op '{node.op}' opt {opts}")
-      if debug >= 2 and node.inputs: print("\tinputs:\n" + "\n".join(f"\t\t{x} - {i!r}" for x,i in zip(node.inputs, inps)))
+      if self.debug >= 1: print(f"{num}: op '{node.op}' opt {opts}")
+      if self.debug >= 2 and node.inputs: print("\tinputs:\n" + "\n".join(f"\t\t{x} - {i!r}" for x,i in zip(node.inputs, inps)))
       ret = self._dispatch_op(node.op, inps, opts)
       ret = ret if isinstance(ret, tuple) else (ret,)
-      if debug >= 2: print("\toutputs:\n" + "\n".join(f"\t\t{x} - {o!r}" for x,o in zip(node.outputs, ret)))
+      if self.debug >= 2: print("\toutputs:\n" + "\n".join(f"\t\t{x} - {o!r}" for x,o in zip(node.outputs, ret)))
 
       self.graph_values.update(dict(zip(node.outputs, ret[:len(node.outputs)], strict=True)))
 
-      if node.num == limit:
+      if num == self.limit:
         Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
         return {name:self.graph_values[name] for name in node.outputs}
     Tensor.training, Tensor.no_grad = self.old_training, self.old_no_grad
-    return {name:self.graph_values[name] for name in self.graph_outputs}
+    return {output_spec.name:self.graph_values[output_spec.name].realize() for output_spec in self.graph_outputs}
+
+  def __call__(self, inputs:dict[str, Any], debug=None):
+    if debug is not None: self.debug = debug
+    runner = self.runner if self.jit else self.jit_runner
+    return runner(**inputs)
