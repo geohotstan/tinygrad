@@ -2203,6 +2203,20 @@ class Tensor(SimpleMathTrait):
     idx = m * idx.pad(pads, value=dtypes.min(idx.dtype))._pool(k_, stride if stride is not None else k_, dilation)
     return pooled.max(axis), spatial_sz - idx.max(axis)
 
+  def max_unpool2d(self, indices:Tensor, kernel_size:tuple[int, ...]=(2,2), stride=None, dilation=1, padding:int|tuple[int, ...]=0, output_size=None):
+    # TODO: clean up and think of edge cases
+    k_ = make_tuple(kernel_size, 2)
+    s_ = make_tuple(stride, len(k_))if stride is not None else kernel_size
+    d_ = make_tuple(dilation, len(k_))
+    pads = self._resolve_pool_pads(padding, len(k_))
+    p_ = _flat_to_grouped(pads)
+    i_ = self.shape[-len(k_):]
+    # https://arxiv.org/pdf/1603.07285 inverse of section 5.1, relationship 15.
+    if output_size is None: output_size = tuple((i-1)*s - (pB+pA) + (d*(k-1)+1) for i,k,s,d,(pA,pB) in zip(i_,k_,s_,d_,p_))
+    else: output_size = output_size[-len(k_):]
+    ret = (indices.flatten(2).unsqueeze(-1)._one_hot_along_dim(prod(output_size)) * self.flatten(2).unsqueeze(-1)).sum(2)
+    return ret.reshape(self.shape[:2] + output_size)
+
   def conv2d(self, weight:Tensor, bias:Tensor|None=None, groups=1, stride=1, dilation=1, padding:int|tuple[int, ...]=0,
              dtype:DTypeLike|None=None) -> Tensor:
     """
@@ -3808,7 +3822,7 @@ class Tensor(SimpleMathTrait):
     assert 0.0 <= label_smoothing <= 1.0, "label_smoothing must be in [0.0, 1.0]"
     assert reduction in ("mean", "sum", "none"), "reduction must be one of ['mean', 'sum', 'none']"
     log_probs, loss_mask = self.log_softmax(), (Y != ignore_index) if ignore_index != -1 else Y.ones_like(dtype=dtypes.bool)
-    y_counted = Y.to(self.device).flatten().reshape(-1, 1)._one_hot_along_dim(self.shape[-1])
+    y_counted = Y.to(self.device).reshape(-1, 1)._one_hot_along_dim(self.shape[-1])
     y = (y_counted * loss_mask.reshape(-1, 1)).reshape(*Y.shape, self.shape[-1])
     smoothing = label_smoothing * (log_probs.mean(-1) * loss_mask)
     unreduced = ((1 - label_smoothing) * (log_probs * y).sum(-1) + smoothing)
