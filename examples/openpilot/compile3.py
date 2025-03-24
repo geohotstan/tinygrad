@@ -12,14 +12,14 @@ from tinygrad.engine.realize import CompiledRunner
 
 import onnx
 from onnx.helper import tensor_dtype_to_np_dtype
-from extra.onnx import OnnxRunner   # TODO: port to main tinygrad
+from tinygrad.frontend.onnx import OnnxRunner
 
 OPENPILOT_MODEL = sys.argv[1] if len(sys.argv) > 1 else "https://github.com/commaai/openpilot/raw/v0.9.7/selfdrive/modeld/models/supercombo.onnx"
 OUTPUT = sys.argv[2] if len(sys.argv) > 2 else "/tmp/openpilot.pkl"
 
 def compile(onnx_file):
   onnx_model = onnx.load(onnx_file)
-  run_onnx = OnnxRunner(onnx_model)
+  run_onnx = OnnxRunner(onnx_file)
   print("loaded model")
 
   input_shapes = {inp.name:tuple(x.dim_value for x in inp.type.tensor_type.shape.dim) for inp in onnx_model.graph.input}

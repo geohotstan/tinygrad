@@ -1,7 +1,7 @@
 from tinygrad import Tensor
 from tinygrad.tensor import _to_np_dtype
-from extra.onnx import OnnxRunner, OnnxValue
-import onnx
+from tinygrad.frontend.onnx import OnnxRunner
+from extra.onnx import OnnxValue
 import numpy as np
 import onnxruntime as ort
 
@@ -46,7 +46,7 @@ def get_example_inputs(graph_inputs:dict[str, OnnxValue], config={}):
   return ret
 
 def validate(onnx_file, inputs, rtol=1e-5, atol=1e-5):
-  run_onnx = OnnxRunner(onnx.load(onnx_file))
+  run_onnx = OnnxRunner(onnx_file)
 
   ort_options = ort.SessionOptions()
   ort_options.log_severity_level = 3

@@ -1,12 +1,13 @@
-from typing import Any, Sequence, cast, Literal, Callable
-import dataclasses, functools, io, math, types
+from typing import Any, Sequence, cast, Literal, Callable, IO
+import dataclasses, functools, io, math, types, os
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple
 from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
 from tinygrad.device import is_dtype_supported
 
-# ***** protobuf parsing ******
-from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
+# ***** onnx protobuf parsing ******
+# NOTE: everything that directly use onnx import is in this block
+from onnx import load, AttributeProto, ModelProto, TensorProto, TypeProto, helper
 import numpy as np
 
 def dtype_parse(onnx_dtype: int) -> DType:
@@ -63,6 +64,18 @@ def type_parse(onnx_type: TypeProto):
     return OnnxValue(shape, dtype, is_optional, is_sequence)
   raise RuntimeError(f"TypeProto was not parsed properly: {onnx_type=}")
 
+def model_parse(onnx_model: ModelProto):
+  is_training = any(n.domain in {"ai.onnx.training", "ai.onnx.preview.training"} for n in onnx_model.graph.node)
+  opset_version = onnx_model.opset_import[0].version
+  values = {"": None, **{x.name:buffer_parse(x) for x in onnx_model.graph.initializer}}
+  inputs = {inp.name: type_parse(inp.type) for inp in onnx_model.graph.input if inp.name not in values}
+  outputs = tuple(x.name for x in onnx_model.graph.output)
+  nodes = tuple(OnnxNode(num, n.op_type, tuple(n.input), tuple(n.output), {x.name:attribute_parse(x) for x in n.attribute})
+                for num,n in enumerate(onnx_model.graph.node))
+  return is_training, values, inputs, outputs, nodes, opset_version
+
+def model_load(f:str | os.PathLike | bytes | IO[bytes]): return load(io.BytesIO(f) if isinstance(f, bytes) else f)
+
 # ***** onnx spec *****
 @dataclasses.dataclass(frozen=True)
 class OnnxValue:
@@ -109,20 +122,18 @@ def to_python_const(t:Any, op:str, idx:int) -> list[ConstType]|ConstType|bytes:
 debug = int(getenv("DEBUGONNX", "0"))
 limit = int(getenv("ONNXLIMIT", "-1"))
 class OnnxRunner:
-  def __init__(self, model: ModelProto):
-    # parse model protobuf
-    self.is_training = any(n.domain in {"ai.onnx.training", "ai.onnx.preview.training"} for n in model.graph.node)
+  """
+  `OnnxRunner` executes an ONNX model using Tinygrad as backend.
+
+  Args:
+    f: The ONNX model, provided either as a file path (a string or path-like object), a file-like object, or as raw bytes.
+  """
+  def __init__(self, f:str | os.PathLike | bytes | IO[bytes]):
+    self.is_training, self.graph_values, self.graph_inputs, self.graph_outputs, self.graph_nodes, self.opset_version = model_parse(model_load(f))
     self.old_training, self.old_no_grad = Tensor.training, Tensor.no_grad
     Tensor.training = True if self.is_training else False
     Tensor.no_grad = False if self.is_training else True
-    self.graph_values = {"": None, **{x.name:buffer_parse(x) for x in model.graph.initializer}}
-    self.graph_inputs = {x.name:type_parse(x.type) for x in model.graph.input if x.name not in self.graph_values}
-    self.graph_outputs = tuple(x.name for x in model.graph.output)
-    self.graph_nodes = tuple(OnnxNode(num, n.op_type, tuple(n.input), tuple(n.output), {x.name:attribute_parse(x) for x in n.attribute})
-                       for num,n in enumerate(model.graph.node))
-    self.opset_version = model.opset_import[0].version
     self.variable_dims: dict[str, int] = {}
-
     self.onnx_ops = onnx_ops
 
   def _parse_input(self, name: str, value: Any, spec: OnnxValue):
@@ -434,11 +445,7 @@ def get_onnx_ops():
     return X.conv_transpose2d(W, B, stride=strides, groups=group, dilation=dilations, padding=pads, output_padding=output_padding)
 
   def MaxUnpool(xT: Tensor, xI: Tensor, outshape: list[int]|None=None, kernel_shape:list[int]=None, pads:list[int]|int=0, strides:list[int]|int=1):
-    pads, strides = (make_tuple(x, len(xI.shape)) for x in (pads, strides))
-    out_sh = [(ks//2)*2 + st * inps for inps, st, ks in zip(xI.shape, strides, kernel_shape)]
-    ret = (xI.reshape(-1, 1)._one_hot_along_dim(prod(out_sh)) * xT.reshape(-1, 1)).sum(0).reshape(1, 1, *out_sh)
-    if outshape is not None and outshape != ret.shape: pads = _auto_pad([outshape[-2] - ret.shape[-2], outshape[-1] - ret.shape[-1]], "SAME_UPPER")
-    return ret.pad(_onnx_pads_to_tiny_pads(pads))
+    return Tensor.max_unpool2d(xT, xI, kernel_shape, strides, 1, pads, outshape if outshape is None else tuple(outshape))
 
   def GlobalAveragePool(X:Tensor): return X.mean(axis=tuple(range(2, X.ndim)), keepdim=True)
   def GlobalMaxPool(X:Tensor): return X.max(axis=tuple(range(2, X.ndim)), keepdim=True)
