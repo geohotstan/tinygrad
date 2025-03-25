@@ -6,7 +6,7 @@ from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
 from tinygrad.device import is_dtype_supported
 
 # ***** protobuf parsing ******
-from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
+from onnx import AttributeProto, ModelProto, TensorProto, TypeProto
 import numpy as np
 
 def dtype_parse(onnx_dtype: int) -> DType:
@@ -46,8 +46,9 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     if shape in ((), (1,)): return Tensor(data[0], dtype=dtype).reshape(shape).realize()
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
+    if onnx_tensor.data_type == 10: dtype = dtypes.float16
     if shape in ((), (1,)): return Tensor(struct.unpack(dtype.fmt, onnx_tensor.raw_data)[0], dtype=dtype).reshape(shape).realize()
-    return Tensor(onnx_tensor.raw_data, dtype=dtype).reshape(shape).realize()
+    return Tensor(onnx_tensor.raw_data, dtype=dtype).cast(dtype).reshape(shape).realize()
     # np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
     # if np_buffer.size == 1:
     #   print(onnx_tensor.raw_data)
@@ -267,6 +268,7 @@ def get_onnx_ops():
     try: import PIL.Image
     except ImportError as e: raise ImportError("Pillow must be installed for the ImageDecoder operator") from e
     img = PIL.Image.open(io.BytesIO(encoded_stream))
+    print(img.tobytes())
     if pixel_format == "BGR": return Tensor(np.array(img))[:, :, ::-1]
     if pixel_format == "RGB": return Tensor(np.array(img))
     if pixel_format == "Grayscale": return Tensor(np.array(img.convert("L"))).unsqueeze(-1) # (H, W) to (H, W, 1)
@@ -723,7 +725,7 @@ def get_onnx_ops():
       inp = inp.flatten()
       axis = 0
     if axis < 0: axis += inp.ndim
-    con = Tensor(np.arange(len(condition))[condition]) # no boolean indexing in Tensor
+    con = Tensor([i for i,cond in enumerate(condition) if cond]) # no boolean indexing in Tensor
     return inp[tuple(con if i == axis else slice(None) for i in range(inp.ndim))]
 
   # ***** Quantization Ops *****
