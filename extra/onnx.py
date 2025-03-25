@@ -43,12 +43,12 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
   dtype, shape = dtype_parse(onnx_tensor.data_type), tuple(onnx_tensor.dims)
   if data := list(onnx_tensor.float_data) or list(onnx_tensor.int32_data) or list(onnx_tensor.int64_data) or list(onnx_tensor.double_data) or \
              list(onnx_tensor.uint64_data):
-    if len(data) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
+    if len(data) == 1: return Tensor(data[0], dtype=dtype).reshape(shape).realize()
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
     np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
-    if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
-    return Tensor(np_buffer, dtype=dtype)
+    if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape).realize()
+    return Tensor(np_buffer, dtype=dtype).realize()
   return Tensor(None)
 
 def type_parse(onnx_type: TypeProto):
