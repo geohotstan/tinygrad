@@ -1,5 +1,5 @@
 from typing import Any, Sequence, cast, Literal, Callable
-import dataclasses, functools, io, math, types, struct
+import dataclasses, functools, io, math, types, sys
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple
 from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
@@ -9,46 +9,41 @@ from tinygrad.device import is_dtype_supported
 from onnx import AttributeProto, ModelProto, TensorProto, TypeProto
 import numpy as np
 
+SUPPORTED_DTYPES: dict[int, DType] = {TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
+  TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
+  TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float16, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
+  TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16}
+UNSUPPORTED_DTYPES = {TensorProto.UNDEFINED, TensorProto.STRING, TensorProto.COMPLEX64, TensorProto.COMPLEX128, TensorProto.FLOAT8E4M3FN, TensorProto.FLOAT8E4M3FNUZ,
+  TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4}
+
+SUPPORTED_ATTRIBUTES: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
+  AttributeProto.FLOAT: lambda a: float(a.f), AttributeProto.INT: lambda a: int(a.i),
+  AttributeProto.STRING: lambda a: a.s.decode("utf-8"), AttributeProto.TENSOR: lambda a: buffer_parse(a.t),
+  AttributeProto.FLOATS: lambda a: tuple(float(x) for x in a.floats), AttributeProto.INTS: lambda a: tuple(int(x) for x in a.ints),
+  AttributeProto.STRINGS: lambda a: tuple(x.decode("utf-8") for x in a.strings)}
+UNSUPPORTED_ATTRIBUTES = {AttributeProto.UNDEFINED, AttributeProto.GRAPH, AttributeProto.SPARSE_TENSOR, AttributeProto.TYPE_PROTO,
+  AttributeProto.TENSORS, AttributeProto.GRAPHS, AttributeProto.SPARSE_TENSORS, AttributeProto.TYPE_PROTOS}
+
 def dtype_parse(onnx_dtype: int) -> DType:
-  supported: dict[int, DType] = {
-    TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
-    TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
-    TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float32, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
-    TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
-  }
-  unsupported = {
-    TensorProto.UNDEFINED, TensorProto.STRING, TensorProto.COMPLEX64, TensorProto.COMPLEX128, TensorProto.FLOAT8E4M3FN, TensorProto.FLOAT8E4M3FNUZ,
-    TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4
-  }
-  if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return supported[onnx_dtype] if is_dtype_supported(supported[onnx_dtype]) else dtypes.float
+  if onnx_dtype in UNSUPPORTED_DTYPES: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
+  return SUPPORTED_DTYPES[onnx_dtype] if is_dtype_supported(SUPPORTED_DTYPES[onnx_dtype]) else dtypes.float
 
 def attribute_parse(onnx_attribute: AttributeProto):
-  supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
-    AttributeProto.FLOAT: lambda a: float(a.f), AttributeProto.INT: lambda a: int(a.i),
-    AttributeProto.STRING: lambda a: a.s.decode("utf-8"), AttributeProto.TENSOR: lambda a: buffer_parse(a.t),
-    AttributeProto.FLOATS: lambda a: tuple(float(x) for x in a.floats), AttributeProto.INTS: lambda a: tuple(int(x) for x in a.ints),
-    AttributeProto.STRINGS: lambda a: tuple(x.decode("utf-8") for x in a.strings)
-  }
-  unsupported = {
-    AttributeProto.UNDEFINED, AttributeProto.GRAPH, AttributeProto.SPARSE_TENSOR, AttributeProto.TYPE_PROTO, AttributeProto.TENSORS,
-    AttributeProto.GRAPHS, AttributeProto.SPARSE_TENSORS, AttributeProto.TYPE_PROTOS
-  }
-  if onnx_attribute.type in unsupported:
+  if onnx_attribute.type in UNSUPPORTED_ATTRIBUTES:
     raise NotImplementedError(f"attribute with type {AttributeProto.AttributeType.Name(onnx_attribute.type)} is not supported")
-  return supported[onnx_attribute.type](onnx_attribute)
+  return SUPPORTED_ATTRIBUTES[onnx_attribute.type](onnx_attribute)
 
 def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
   if onnx_tensor.string_data: raise NotImplementedError("Parsing for buffer with string data is not implemented.")
   dtype, shape = dtype_parse(onnx_tensor.data_type), tuple(onnx_tensor.dims)
   if data := list(onnx_tensor.float_data) or list(onnx_tensor.int32_data) or list(onnx_tensor.int64_data) or list(onnx_tensor.double_data) or \
              list(onnx_tensor.uint64_data):
-    if shape in ((), (1,)): return Tensor(data[0], dtype=dtype).reshape(shape).realize()
+    if math.prod(shape) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
-    if onnx_tensor.data_type == 10: dtype = dtypes.float16
-    if shape in ((), (1,)): return Tensor(struct.unpack(dtype.fmt, onnx_tensor.raw_data)[0], dtype=dtype).reshape(shape).realize()
-    return Tensor(onnx_tensor.raw_data, dtype=dtype).cast(dtype).reshape(shape).realize()
+    data = Tensor(onnx_tensor.raw_data, dtype=SUPPORTED_DTYPES[onnx_tensor.data_type], device="PYTHON").reshape(shape).tolist()
+    if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
+    return Tensor(data, dtype=dtype)
     # np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
     # if np_buffer.size == 1:
     #   print(onnx_tensor.raw_data)
