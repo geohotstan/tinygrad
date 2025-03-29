@@ -3,7 +3,7 @@ import dataclasses, functools, io, math, types, struct
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple
 from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
-from tinygrad.device import is_dtype_supported
+from tinygrad.device import is_dtype_supported, Buffer, Device
 
 # ***** protobuf parsing ******
 from onnx import AttributeProto, ModelProto, TensorProto, TypeProto
@@ -43,13 +43,22 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
   dtype, shape = dtype_parse(onnx_tensor.data_type), tuple(onnx_tensor.dims)
   if data := list(onnx_tensor.float_data) or list(onnx_tensor.int32_data) or list(onnx_tensor.int64_data) or list(onnx_tensor.double_data) or \
              list(onnx_tensor.uint64_data):
-    if math.prod(shape) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
+    if prod(shape) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
     raw_dtype = SUPPORTED_DTYPES[onnx_tensor.data_type]
-    data = struct.unpack(f'{math.prod(shape)}{raw_dtype.fmt}', onnx_tensor.raw_data)
-    if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
-    return Tensor(data, dtype=dtype).reshape(shape).realize()
+    if prod(shape) == 1: return  Tensor(struct.unpack(f'{raw_dtype.fmt}', onnx_tensor.raw_data)[0], dtype=dtype).reshape(shape)
+    return Tensor(onnx_tensor.raw_data, dtype=raw_dtype, device="CPU").reshape(shape).cast(dtype).to(Device.DEFAULT)
+
+    # if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
+    # return Tensor(data, dtype=dtype).reshape(shape).realize()
+
+    # buf = Buffer(device=Device.DEFAULT, size=len(onnx_tensor.raw_data)//raw_dtype.itemsize, dtype=raw_dtype).ensure_allocated()
+    # buf.copyin(memoryview(bytearray(onnx_tensor.raw_data)))
+    # exit()
+    # data = struct.unpack(f'{math.prod(shape)}{raw_dtype.fmt}', onnx_tensor.raw_data)
+    # if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
+    # return Tensor(data, dtype=dtype).reshape(shape).realize()
   return Tensor(None)
 
 def type_parse(onnx_type: TypeProto):
@@ -262,7 +271,7 @@ def get_onnx_ops():
     img = PIL.Image.open(io.BytesIO(encoded_stream))
     if pixel_format == "BGR": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3).flip(-1)
     if pixel_format == "RGB": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3)
-    if pixel_format == "Grayscale": return Tensor(img.convert("L").tobytes(), dtype=dtypes.uint8).reshape(img.size).unsqueeze(-1)
+    if pixel_format == "Grayscale": return Tensor(img.convert("L").tobytes(), dtype=dtypes.uint8).reshape(*img.size, 1)
     raise ValueError(f"pixel_format={pixel_format!r} is not supported.")
 
   def EyeLike(x:Tensor, dtype:int|None=None, k:int=0):
