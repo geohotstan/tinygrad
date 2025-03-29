@@ -8,20 +8,20 @@ from tinygrad.device import is_dtype_supported
 # ***** protobuf parsing ******
 from onnx import AttributeProto, ModelProto, TensorProto, TypeProto
 import numpy as np
+SUPPORTED_DTYPES: dict[int, DType] = {
+  TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
+  TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
+  TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float16, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
+  TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
+}
 
 def dtype_parse(onnx_dtype: int) -> DType:
-  supported: dict[int, DType] = {
-    TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
-    TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
-    TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float32, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
-    TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
-  }
   unsupported = {
     TensorProto.UNDEFINED, TensorProto.STRING, TensorProto.COMPLEX64, TensorProto.COMPLEX128, TensorProto.FLOAT8E4M3FN, TensorProto.FLOAT8E4M3FNUZ,
     TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return supported[onnx_dtype] if is_dtype_supported(supported[onnx_dtype]) else dtypes.float
+  return SUPPORTED_DTYPES[onnx_dtype] if is_dtype_supported(SUPPORTED_DTYPES[onnx_dtype]) else dtypes.float
 
 def attribute_parse(onnx_attribute: AttributeProto):
   supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
@@ -46,7 +46,8 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     if math.prod(shape) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
-    data = struct.unpack(f'{math.prod(shape)}{dtype.fmt}', onnx_tensor.raw_data)
+    raw_dtype = SUPPORTED_DTYPES[onnx_tensor.data_type]
+    data = struct.unpack(f'{math.prod(shape)}{raw_dtype.fmt}', onnx_tensor.raw_data)
     if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   return Tensor(None)
