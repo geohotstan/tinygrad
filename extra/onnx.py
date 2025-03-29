@@ -1,27 +1,27 @@
 from typing import Any, Sequence, cast, Literal, Callable
-import dataclasses, functools, io, math, types
+import dataclasses, functools, io, math, types, struct
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple
 from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
-from tinygrad.device import is_dtype_supported
+from tinygrad.device import is_dtype_supported, Buffer, Device
 
 # ***** protobuf parsing ******
-from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
+from onnx import AttributeProto, ModelProto, TensorProto, TypeProto
 import numpy as np
+SUPPORTED_DTYPES: dict[int, DType] = {
+  TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
+  TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
+  TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float16, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
+  TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
+}
 
 def dtype_parse(onnx_dtype: int) -> DType:
-  supported: dict[int, DType] = {
-    TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
-    TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
-    TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float32, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
-    TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
-  }
   unsupported = {
     TensorProto.UNDEFINED, TensorProto.STRING, TensorProto.COMPLEX64, TensorProto.COMPLEX128, TensorProto.FLOAT8E4M3FN, TensorProto.FLOAT8E4M3FNUZ,
     TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return supported[onnx_dtype] if is_dtype_supported(supported[onnx_dtype]) else dtypes.float
+  return SUPPORTED_DTYPES[onnx_dtype] if is_dtype_supported(SUPPORTED_DTYPES[onnx_dtype]) else dtypes.float
 
 def attribute_parse(onnx_attribute: AttributeProto):
   supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
@@ -43,12 +43,22 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
   dtype, shape = dtype_parse(onnx_tensor.data_type), tuple(onnx_tensor.dims)
   if data := list(onnx_tensor.float_data) or list(onnx_tensor.int32_data) or list(onnx_tensor.int64_data) or list(onnx_tensor.double_data) or \
              list(onnx_tensor.uint64_data):
-    if len(data) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
+    if prod(shape) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if onnx_tensor.HasField("raw_data"):
-    np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
-    if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
-    return Tensor(np_buffer, dtype=dtype)
+    raw_dtype = SUPPORTED_DTYPES[onnx_tensor.data_type]
+    if prod(shape) == 1: return  Tensor(struct.unpack(f'{raw_dtype.fmt}', onnx_tensor.raw_data)[0], dtype=dtype).reshape(shape)
+    return Tensor(onnx_tensor.raw_data, dtype=raw_dtype, device="CPU").reshape(shape).cast(dtype).to(Device.DEFAULT)
+
+    # if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
+    # return Tensor(data, dtype=dtype).reshape(shape).realize()
+
+    # buf = Buffer(device=Device.DEFAULT, size=len(onnx_tensor.raw_data)//raw_dtype.itemsize, dtype=raw_dtype).ensure_allocated()
+    # buf.copyin(memoryview(bytearray(onnx_tensor.raw_data)))
+    # exit()
+    # data = struct.unpack(f'{math.prod(shape)}{raw_dtype.fmt}', onnx_tensor.raw_data)
+    # if math.prod(shape) == 1: return Tensor(data[0] if isinstance(data, list) else data, dtype=dtype).reshape(shape)
+    # return Tensor(data, dtype=dtype).reshape(shape).realize()
   return Tensor(None)
 
 def type_parse(onnx_type: TypeProto):
@@ -259,9 +269,9 @@ def get_onnx_ops():
     try: import PIL.Image
     except ImportError as e: raise ImportError("Pillow must be installed for the ImageDecoder operator") from e
     img = PIL.Image.open(io.BytesIO(encoded_stream))
-    if pixel_format == "BGR": return Tensor(np.array(img))[:, :, ::-1]
-    if pixel_format == "RGB": return Tensor(np.array(img))
-    if pixel_format == "Grayscale": return Tensor(np.array(img.convert("L"))).unsqueeze(-1) # (H, W) to (H, W, 1)
+    if pixel_format == "BGR": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3).flip(-1)
+    if pixel_format == "RGB": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3)
+    if pixel_format == "Grayscale": return Tensor(img.convert("L").tobytes(), dtype=dtypes.uint8).reshape(*img.size, 1)
     raise ValueError(f"pixel_format={pixel_format!r} is not supported.")
 
   def EyeLike(x:Tensor, dtype:int|None=None, k:int=0):
@@ -715,7 +725,7 @@ def get_onnx_ops():
       inp = inp.flatten()
       axis = 0
     if axis < 0: axis += inp.ndim
-    con = Tensor(np.arange(len(condition))[condition]) # no boolean indexing in Tensor
+    con = Tensor([i for i,cond in enumerate(condition) if cond]) # no boolean indexing in Tensor
     return inp[tuple(con if i == axis else slice(None) for i in range(inp.ndim))]
 
   # ***** Quantization Ops *****
