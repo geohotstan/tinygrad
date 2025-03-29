@@ -259,10 +259,9 @@ def get_onnx_ops():
     try: import PIL.Image
     except ImportError as e: raise ImportError("Pillow must be installed for the ImageDecoder operator") from e
     img = PIL.Image.open(io.BytesIO(encoded_stream))
-    print(img.tobytes())
-    if pixel_format == "BGR": return Tensor(np.array(img))[:, :, ::-1]
-    if pixel_format == "RGB": return Tensor(np.array(img))
-    if pixel_format == "Grayscale": return Tensor(np.array(img.convert("L"))).unsqueeze(-1) # (H, W) to (H, W, 1)
+    if pixel_format == "BGR": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3).flip(-1)
+    if pixel_format == "RGB": return Tensor(img.tobytes(), dtype=dtypes.uint8).reshape(*img.size, 3)
+    if pixel_format == "Grayscale": return Tensor(img.convert("L").tobytes(), dtype=dtypes.uint8).reshape(img.size).unsqueeze(-1)
     raise ValueError(f"pixel_format={pixel_format!r} is not supported.")
 
   def EyeLike(x:Tensor, dtype:int|None=None, k:int=0):
