@@ -26,7 +26,7 @@ np.random.seed(1337)
 class TestOnnxModel(unittest.TestCase):
   def test_benchmark_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
-    run_onnx = OnnxRunner(onnx_model)
+    run_onnx = OnnxRunner(onnx_model, float32=True)
     def get_inputs():
       np_inputs = {
         "input_imgs": np.random.randn(*(1, 12, 128, 256)),
@@ -70,7 +70,7 @@ class TestOnnxModel(unittest.TestCase):
 
   def test_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
-    run_onnx = OnnxRunner(onnx_model)
+    run_onnx = OnnxRunner(onnx_model, float32=True)
     print("got run_onnx")
     inputs = {
       "input_imgs": np.random.randn(*(1, 12, 128, 256)),

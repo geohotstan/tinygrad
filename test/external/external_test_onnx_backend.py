@@ -78,13 +78,6 @@ backend_test.exclude('FLOAT8')
 backend_test.exclude('INT4')
 backend_test.exclude('UINT4')
 backend_test.exclude('BFLOAT16')  # not supported in numpy
-# TODO: fix these with true onnx float16
-backend_test.exclude('to_FLOAT16')
-backend_test.exclude('cast_no_saturate')
-backend_test.exclude('test_dequantizelinear_e4m3fn_float16_cpu')
-backend_test.exclude('test_max_float16_cpu')
-backend_test.exclude('test_min_float16_cpu')
-backend_test.exclude('test_mod_mixed_sign_float16_cpu')
 
 backend_test.exclude('test_dequantizelinear_int4_cpu')
 backend_test.exclude('test_dequantizelinear_uint4_cpu')
@@ -98,6 +91,7 @@ backend_test.exclude('test_quantizelinear_e4m3fn_cpu')
 backend_test.exclude('test_quantizelinear_e5m2_cpu')
 backend_test.exclude('test_dequantizelinear_e4m3fn_cpu')
 backend_test.exclude('test_dequantizelinear_e4m3fn_zero_point_cpu')
+backend_test.exclude('test_dequantizelinear_e4m3fn_float16_cpu')
 backend_test.exclude('test_dequantizelinear_e5m2_cpu')
 
 # we don't support indexes
@@ -174,6 +168,12 @@ backend_test.exclude('test_resize_downsample_scales_linear_antialias_cpu') # ant
 backend_test.exclude('test_resize_downsample_sizes_linear_antialias_cpu') # antialias not implemented
 backend_test.exclude('test_ai_onnx_ml_label_encoder_tensor_value_only_mapping_cpu') # bad data type string
 backend_test.exclude('test_ai_onnx_ml_label_encoder_tensor_mapping_cpu') # bad data type string
+
+# no support for sequence
+backend_test.exclude('test_identity_opt_cpu')
+backend_test.exclude('test_identity_sequence_cpu')
+backend_test.exclude('test_optional_get_element_optional_sequence_cpu')
+backend_test.exclude('test_optional_get_element_sequence_cpu')
 
 backend_test.exclude('test_scatternd_min_cpu') # min not yet supported
 backend_test.exclude('test_scatternd_max_cpu') # max not yet supported
