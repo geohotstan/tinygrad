@@ -489,4 +489,16 @@ sym = symbolic_flat+PatternMatcher([
   (UPat.var("x") * ((1+UPat.var("x")).reciprocal().named("d")), lambda x,d: 1-d), # x*/(1+x) -> 1-1/(1+x)
   (UPat.var("x") * ((1+UPat.var("x")).reciprocal().named("d")*UPat.var("y")), lambda x,y,d: y*(1-d)),
   (UPat.var("x") * ((1+UPat.var("x")).reciprocal().named("d")+UPat.var("y")), lambda x,y,d: (1-d)+x*y),
-])
+
+  # THIS PUSHES r_256_2 back
+  (UPat((Ops.RECIP,Ops.SQRT), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
+   lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
+  (UPat(Ops.MAX, src=(UPat.var("float").cast(dtypes.half), UPat.var("cmp")), dtype=dtypes.float16, name="x"),
+   lambda x,cmp,float: UOp(x.op, dtypes.float32, (float, cmp.cast(dtypes.float32))).cast(dtypes.half)),
+
+  # THIS PUSHES CONV -> ELU back
+  (UPat(Ops.ADD, src=(UPat.var("float").cast(dtypes.half), UPat(Ops.LOAD, dtype=dtypes.half, name="ld")), dtype=dtypes.half, name="x"),
+   lambda x,ld,float: UOp(x.op, dtypes.float32, (float, ld.cast(dtypes.float))).cast(dtypes.half)),
+
+  # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
+  #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
