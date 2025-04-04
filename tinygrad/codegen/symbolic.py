@@ -490,10 +490,7 @@ sym = symbolic_flat+PatternMatcher([
   (UPat(Ops.REDUCE, src=(UPat.var("x")*UPat.cvar("c", vec=False),), arg=Ops.ADD, name="r", allow_any_len=True),
    lambda x,c,r: r.replace(src=(x,)+r.src[1:])*c.arg),
 
-  (UPat(Ops.STORE, name="x"), lambda x: maybe_push_cast(x)),
-
-
-
+  # (UPat(Ops.STORE, src=() name="x"), lambda x: maybe_push_cast(x)),
 
   ### WRONG!!!!
   # THIS PUSHES r_256_2 back
@@ -511,3 +508,16 @@ sym = symbolic_flat+PatternMatcher([
   # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
   #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
 ])
+
+def maybe_push_cast(x:UOp):
+  # Pattern
+  # for c in x.src:
+  #   if c.op in GroupOp.ALU:
+  #     for cc in c.src:
+  #       if cc.op is Ops.CAST and cc.src[0].op is Ops.REDUCE:
+  #         return cc.src[0].alu(c.op, *(x.cast(c.dtype) for y in c.src if y is not cc))
+  #   new_c = maybe_push_cast(c)
+  #   x = x.replace(src=tuple(new_c if new_c is not None else c for c in x.src))
+  # return x
+  ...
+
