@@ -502,8 +502,8 @@ sym = symbolic_flat+PatternMatcher([
   # (UPat(Ops.ADD, src=(UPat.var("float").cast(dtypes.half), UPat(Ops.LOAD, dtype=dtypes.half, name="ld")), dtype=dtypes.half, name="x"),
   #  lambda x,ld,float: UOp(x.op, dtypes.float32, (float, ld.cast(dtypes.float))).cast(dtypes.half)),
 
-  # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
-  #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
+  (UPat((*GroupOp.Unary,), src=(UPat.var("float", dtype=dtypes.float32).cast(dtypes.half),), dtype=dtypes.float16, name="x"),
+   lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
 
   # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
   #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
