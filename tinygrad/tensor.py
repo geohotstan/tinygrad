@@ -329,7 +329,7 @@ class Tensor(SimpleMathTrait):
     print(t.tolist())
     ```
     """
-    return cast(memoryview, self.data()).tolist()
+    return self.data().tolist()
 
   def numpy(self) -> 'np.ndarray':  # type: ignore [name-defined] # noqa: F821
     """
