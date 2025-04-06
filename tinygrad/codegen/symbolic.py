@@ -504,12 +504,17 @@ sym = symbolic_flat+PatternMatcher([
 
   (UPat((*GroupOp.Unary,), src=(UPat.var("float", dtype=dtypes.float32).cast(dtypes.half),), dtype=dtypes.float16, name="x"),
    lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
+  (UPat((*GroupOp.Binary,), src=[UPat.var("float", dtype=dtypes.float32).cast(dtypes.half), UPat.any(UPat.var("other", dtype=dtypes.half), UPat.cvar("other", dtype=dtypes.half))], dtype=dtypes.float16, name="x"),
+   lambda x,float,other: UOp(x.op, dtypes.float32, (float, other.cast(dtypes.float32))).cast(dtypes.half)),
+  # (UPat.var("cond", dtype=dtypes.bool).where(UPat.var("float", dtype=dtypes.float32).cast(dtypes.half), UPat.var("other", dtype=dtypes.half)),
+   # lambda cond,float,other: cond.where(float, other.cast(dtypes.float32)).cast(dtypes.half)),
+  # (UPat(Ops.WHERE, name="w", src=(UPat(dtype=dtypes.bool), UPat.var("x"), UPat.var("y"))), lambda w,x,y: w.dtype == x.dtype == y.dtype),
 
   # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
   #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
 ])
 
-def maybe_push_cast(x:UOp):
+# def maybe_push_cast(x:UOp):
   # Pattern
   # for c in x.src:
   #   if c.op in GroupOp.ALU:
@@ -519,5 +524,5 @@ def maybe_push_cast(x:UOp):
   #   new_c = maybe_push_cast(c)
   #   x = x.replace(src=tuple(new_c if new_c is not None else c for c in x.src))
   # return x
-  ...
+  # ...
 
