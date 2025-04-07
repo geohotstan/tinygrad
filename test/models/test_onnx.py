@@ -9,7 +9,7 @@ except ModuleNotFoundError:
   raise unittest.SkipTest("onnx not installed, skipping onnx test")
 from tinygrad.frontend.onnx import OnnxRunner
 from tinygrad.tensor import Tensor
-from tinygrad.helpers import CI, fetch, temp
+from tinygrad.helpers import CI, fetch, temp, Context
 from tinygrad.device import is_dtype_supported
 from tinygrad.dtype import dtypes
 
@@ -86,16 +86,17 @@ class TestOnnxModel(unittest.TestCase):
     }
     inputs = {k:v.astype(np.float16) for k,v in inputs.items()}
 
-    st = time.monotonic()
-    print("****** run onnx ******")
-    tinygrad_out = run_onnx(inputs)['outputs']
-    mt = time.monotonic()
-    print("****** realize ******")
-    tinygrad_out.realize()
-    mt2 = time.monotonic()
-    tinygrad_out = tinygrad_out.numpy()
-    et = time.monotonic()
-    print(f"ran openpilot model in {(et-st)*1000.0:.2f} ms, waited {(mt2-mt)*1000.0:.2f} ms for realize, {(et-mt2)*1000.0:.2f} ms for GPU queue")
+    with Context(LATE_FLOAT16_CAST=1):
+      st = time.monotonic()
+      print("****** run onnx ******")
+      tinygrad_out = run_onnx(inputs)['outputs']
+      mt = time.monotonic()
+      print("****** realize ******")
+      tinygrad_out.realize()
+      mt2 = time.monotonic()
+      tinygrad_out = tinygrad_out.numpy()
+      et = time.monotonic()
+      print(f"ran openpilot model in {(et-st)*1000.0:.2f} ms, waited {(mt2-mt)*1000.0:.2f} ms for realize, {(et-mt2)*1000.0:.2f} ms for GPU queue")
 
     Tensor.no_grad = True
     torch_out = run_onnx_torch(onnx_model, inputs).numpy()
