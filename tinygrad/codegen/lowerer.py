@@ -228,6 +228,8 @@ pm_push_cast = PatternMatcher([
   # https://media.discordapp.net/attachments/1356919387138949190/1358476613666471946/image.png?ex=67f3fb6f&is=67f2a9ef&hm=c6e9b3d82bc3dd5e2eece90c9ab16835b95e9540b27381cae1d76e4b0e024b9b&=&format=webp&quality=lossless&width=992&height=1272
   (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_half), lambda cond,f32,other:
    UOp(cond.op, cond.dtype, (cond.src[0].cast(dtypes.float32), f32)).where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
+  # pushing casts to other binop branches may have double cast
+  # this cast can just be cancelled out since all it does is decrease precision for absolutely no reason
   (UPat.var("x", dtype=dtypes.float32).cast(dtypes.half).cast(dtypes.float32), lambda x: x)
 ])
 

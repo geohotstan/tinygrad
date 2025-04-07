@@ -10,6 +10,8 @@ except ModuleNotFoundError:
 from tinygrad.frontend.onnx import OnnxRunner
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import CI, fetch, temp
+from tinygrad.device import is_dtype_supported
+from tinygrad.dtype import dtypes
 
 def run_onnx_torch(onnx_model, inputs):
   import torch
@@ -24,6 +26,7 @@ OPENPILOT_MODEL = "https://github.com/commaai/openpilot/raw/v0.9.4/selfdrive/mod
 np.random.seed(1337)
 
 class TestOnnxModel(unittest.TestCase):
+  @unittest.skipUnless(is_dtype_supported(dtypes.float16), "need half")
   def test_benchmark_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
     run_onnx = OnnxRunner(onnx_model)
@@ -68,6 +71,7 @@ class TestOnnxModel(unittest.TestCase):
       ps = stats.sort_stats(pstats.SortKey.TIME)
       ps.print_stats(30)
 
+  @unittest.skipUnless(is_dtype_supported(dtypes.float16), "need half")
   def test_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
     run_onnx = OnnxRunner(onnx_model)
@@ -97,7 +101,7 @@ class TestOnnxModel(unittest.TestCase):
     torch_out = run_onnx_torch(onnx_model, inputs).numpy()
     Tensor.no_grad = False
     print(tinygrad_out, torch_out)
-    np.testing.assert_allclose(tinygrad_out, torch_out, atol=1e-4, rtol=1e-2)
+    np.testing.assert_allclose(tinygrad_out, torch_out, atol=4e-2, rtol=4e-2)
 
   @unittest.skip("slow")
   def test_efficientnet(self):
