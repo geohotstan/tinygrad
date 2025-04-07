@@ -223,17 +223,23 @@ other_f32_to_f16 = UPat.var("other_f32", dtype=dtypes.float32).cast(dtypes.half)
 other_half = UPat.any(UPat.var("other", dtype=dtypes.half), UPat.cvar("other", dtype=dtypes.half))
 pm_push_half_cast = PatternMatcher([
   (UPat(GroupOp.Unary, src=(f32_to_f16,), name="x"), lambda x,f32: UOp(x.op, dtypes.float32, (f32,), x.arg).cast(dtypes.half)),
-  (UPat(GroupOp.Binary, src=[f32_to_f16, other_f32_to_f16], name="x"),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_f32_to_f16), dtype=dtypes.half, name="x"),
    lambda x,f32,other_f32: f32.alu(x.op, other_f32).cast(dtypes.float16)),
-  (UPat(GroupOp.Binary, src=[f32_to_f16, other_half], dtype=dtypes.float16, name="x"),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_half), dtype=dtypes.half, name="x"),
    lambda x,f32,other: f32.alu(x.op, other.cast(dtypes.float32)).cast(dtypes.float16)),
-  (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_f32_to_f16), lambda cond,f32,other_f32:
-   cond.where(f32, other_f32).cast(dtypes.half)),
+  (UPat(GroupOp.Binary, src=(other_half, f32_to_f16), dtype=dtypes.half, name="x"),
+   lambda x,f32,other: other.cast(dtypes.float32).alu(x.op, f32).cast(dtypes.float16)),
+  (UPat(GroupOp.Binary, src=(other_half, f32_to_f16), dtype=dtypes.ints + (dtypes.bool,), name="x"),
+   lambda x,f32,other: other.cast(dtypes.float32).alu(x.op, f32)),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_half), dtype=dtypes.ints + (dtypes.bool,), name="x"),
+   lambda x,f32,other: f32.alu(x.op, other.cast(dtypes.float32))),
+  (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_f32_to_f16), lambda cond,f32,other_f32: cond.where(f32, other_f32).cast(dtypes.half)),
   (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_half), lambda cond,f32,other:
-   cond.where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
-
-  # (UPat.var("x", dtype=dtypes.float32).cast(dtypes.half).alu())
-
+    cond.where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
+  (UPat.var("cond", dtype=dtypes.bool).where(other_half, f32_to_f16), lambda cond,f32,other:
+    cond.where(other.cast(dtypes.float32), f32).cast(dtypes.half)),
+  (UPat.var("cond", dtype=dtypes.bool).where(other_half, f32_to_f16), lambda cond,f32,other:
+    cond.where(other.cast(dtypes.float32), f32).cast(dtypes.half)),
   # fold casts
   (f32_to_f16.cast(dtypes.float32), lambda f32: f32)
 ])
