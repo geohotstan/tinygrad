@@ -219,23 +219,28 @@ pm_quant = symbolic+PatternMatcher([
 # **** push intermediate casts to f32 rightward to store ****
 # only pushing casts through GroupOP.ALUs
 f32_to_f16 = UPat.var("f32", dtype=dtypes.float32).cast(dtypes.half)
+other_f32_to_f16 = UPat.var("other_f32", dtype=dtypes.float32).cast(dtypes.half)
 other_half = UPat.any(UPat.var("other", dtype=dtypes.half), UPat.cvar("other", dtype=dtypes.half))
-pm_push_cast = PatternMatcher([
-  (UPat((*GroupOp.Unary,), src=(f32_to_f16,), dtype=dtypes.float16, name="x"),
-   lambda x,f32: UOp(x.op, dtypes.float32, (f32,), x.arg).cast(dtypes.half)),
-  (UPat((*GroupOp.Binary,), src=[f32_to_f16, other_half], dtype=dtypes.float16, name="x"),
+pm_push_half_cast = PatternMatcher([
+  (UPat(GroupOp.Unary, src=(f32_to_f16,), name="x"), lambda x,f32: UOp(x.op, dtypes.float32, (f32,), x.arg).cast(dtypes.half)),
+  (UPat(GroupOp.Binary, src=[f32_to_f16, other_f32_to_f16], name="x"),
+   lambda x,f32,other_f32: f32.alu(x.op, other_f32).cast(dtypes.float16)),
+  (UPat(GroupOp.Binary, src=[f32_to_f16, other_half], dtype=dtypes.float16, name="x"),
    lambda x,f32,other: f32.alu(x.op, other.cast(dtypes.float32)).cast(dtypes.float16)),
-  # https://media.discordapp.net/attachments/1356919387138949190/1358476613666471946/image.png?ex=67f3fb6f&is=67f2a9ef&hm=c6e9b3d82bc3dd5e2eece90c9ab16835b95e9540b27381cae1d76e4b0e024b9b&=&format=webp&quality=lossless&width=992&height=1272
+  (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_f32_to_f16), lambda cond,f32,other_f32:
+   cond.where(f32, other_f32).cast(dtypes.half)),
   (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_half), lambda cond,f32,other:
-   UOp(cond.op, cond.dtype, (cond.src[0].cast(dtypes.float32), f32)).where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
-  # pushing casts to other binop branches may have double cast
-  # this cast can just be cancelled out since all it does is decrease precision for absolutely no reason
-  (UPat.var("x", dtype=dtypes.float32).cast(dtypes.half).cast(dtypes.float32), lambda x: x)
+   cond.where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
+
+  # (UPat.var("x", dtype=dtypes.float32).cast(dtypes.half).alu())
+
+  # fold casts
+  (f32_to_f16.cast(dtypes.float32), lambda f32: f32)
 ])
 
 def rewrite_shapetracker_with_index(ast:UOp, opts:Renderer) -> UOp:
   if QUANTIZE and opts.device in {"CPU", "DSP"}: ast = graph_rewrite(ast, pm_quant, name="quantize")
-  ast = graph_rewrite(ast, pm_push_cast, name="push_cast")
+  ast = graph_rewrite(ast, pm_push_half_cast, name="push_cast")
   sink = graph_rewrite(ast, pm_lowerer, ctx=get_index(ast, opts))
   # expand_rewrite turns this into a vectorized program
   return expand_rewrite(sink)
