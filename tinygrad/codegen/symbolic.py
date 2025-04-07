@@ -489,40 +489,4 @@ sym = symbolic_flat+PatternMatcher([
   # move const multiply after REDUCE
   (UPat(Ops.REDUCE, src=(UPat.var("x")*UPat.cvar("c", vec=False),), arg=Ops.ADD, name="r", allow_any_len=True),
    lambda x,c,r: r.replace(src=(x,)+r.src[1:])*c.arg),
-
-  # (UPat(Ops.STORE, src=() name="x"), lambda x: maybe_push_cast(x)),
-
-  ### WRONG!!!!
-  # THIS PUSHES r_256_2 back
-  # (UPat((Ops.RECIP,Ops.SQRT), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
-  #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
-  # (UPat(Ops.MAX, src=(UPat.var("float").cast(dtypes.half), UPat.var("cmp")), dtype=dtypes.float16, name="x"),
-  #  lambda x,cmp,float: UOp(x.op, dtypes.float32, (float, cmp.cast(dtypes.float32))).cast(dtypes.half)),
-  # # THIS PUSHES CONV -> ELU back
-  # (UPat(Ops.ADD, src=(UPat.var("float").cast(dtypes.half), UPat(Ops.LOAD, dtype=dtypes.half, name="ld")), dtype=dtypes.half, name="x"),
-  #  lambda x,ld,float: UOp(x.op, dtypes.float32, (float, ld.cast(dtypes.float))).cast(dtypes.half)),
-
-  (UPat((*GroupOp.Unary,), src=(UPat.var("float", dtype=dtypes.float32).cast(dtypes.half),), dtype=dtypes.float16, name="x"),
-   lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
-  (UPat((*GroupOp.Binary,), src=[UPat.var("float", dtype=dtypes.float32).cast(dtypes.half), UPat.any(UPat.var("other", dtype=dtypes.half), UPat.cvar("other", dtype=dtypes.half))], dtype=dtypes.float16, name="x"),
-   lambda x,float,other: UOp(x.op, dtypes.float32, (float, other.cast(dtypes.float32))).cast(dtypes.half)),
-  # (UPat.var("cond", dtype=dtypes.bool).where(UPat.var("float", dtype=dtypes.float32).cast(dtypes.half), UPat.var("other", dtype=dtypes.half)),
-   # lambda cond,float,other: cond.where(float, other.cast(dtypes.float32)).cast(dtypes.half)),
-  # (UPat(Ops.WHERE, name="w", src=(UPat(dtype=dtypes.bool), UPat.var("x"), UPat.var("y"))), lambda w,x,y: w.dtype == x.dtype == y.dtype),
-
-  # (UPat((*GroupOp.Unary,), src=(UPat.var("float").cast(dtypes.half),), dtype=dtypes.float16, name="x"),
-  #  lambda x,float: UOp(x.op, dtypes.float32, (float,), x.arg).cast(dtypes.half)),
 ])
-
-# def maybe_push_cast(x:UOp):
-  # Pattern
-  # for c in x.src:
-  #   if c.op in GroupOp.ALU:
-  #     for cc in c.src:
-  #       if cc.op is Ops.CAST and cc.src[0].op is Ops.REDUCE:
-  #         return cc.src[0].alu(c.op, *(x.cast(c.dtype) for y in c.src if y is not cc))
-  #   new_c = maybe_push_cast(c)
-  #   x = x.replace(src=tuple(new_c if new_c is not None else c for c in x.src))
-  # return x
-  # ...
-
