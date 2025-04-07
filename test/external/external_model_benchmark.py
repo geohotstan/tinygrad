@@ -7,7 +7,7 @@ from onnx.helper import tensor_dtype_to_np_dtype
 import onnxruntime as ort
 from onnx2torch import convert
 from tinygrad.frontend.onnx import OnnxRunner
-from tinygrad.helpers import OSX, DEBUG, fetch, Context
+from tinygrad.helpers import OSX, DEBUG, fetch
 from tinygrad import Tensor, Device
 from tinygrad.device import CompileError
 
@@ -121,9 +121,9 @@ def benchmark_model(m, devices, validate_outs=False):
       ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])
       onnx_out = ort_sess.run(output_names, np_inputs)
       onnx_out = dict([*list(zip(output_names, onnx_out))])
-      with Context(LATE_FLOAT16_CAST=1):
-        assert_allclose(tinygrad_out, onnx_out, rtol=rtol, atol=atol)
-        print(f"{m:16s}outputs validated on {device=} with rtol={rtol:.1e}, atol={atol:.1e}")
+
+      assert_allclose(tinygrad_out, onnx_out, rtol=rtol, atol=atol)
+      print(f"{m:16s}outputs validated on {device=} with rtol={rtol:.1e}, atol={atol:.1e}")
 
   if open_csv is None:
     open_csv = csv.DictWriter(open('onnx_inference_speed.csv', 'w', newline=''), fieldnames=list(CSV.keys()))
