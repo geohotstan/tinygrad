@@ -10,11 +10,13 @@ except ModuleNotFoundError:
 from tinygrad.frontend.onnx import OnnxRunner
 from tinygrad.tensor import Tensor
 from tinygrad.helpers import CI, fetch, temp
+from tinygrad.device import is_dtype_supported
+from tinygrad.dtype import dtypes
 
 def run_onnx_torch(onnx_model, inputs):
   import torch
   from onnx2torch import convert
-  torch_model = convert(onnx_model).float()
+  torch_model = convert(onnx_model)
   with torch.no_grad():
     torch_out = torch_model(*[torch.tensor(x) for x in inputs.values()])
   return torch_out
@@ -24,6 +26,7 @@ OPENPILOT_MODEL = "https://github.com/commaai/openpilot/raw/v0.9.4/selfdrive/mod
 np.random.seed(1337)
 
 class TestOnnxModel(unittest.TestCase):
+  @unittest.skipUnless(is_dtype_supported(dtypes.float16), "need half")
   def test_benchmark_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
     run_onnx = OnnxRunner(onnx_model)
@@ -36,7 +39,7 @@ class TestOnnxModel(unittest.TestCase):
         "nav_features": np.zeros((1, 256)),
         "features_buffer": np.zeros((1, 99, 128)),
     }
-      inputs = {k:Tensor(v.astype(np.float32), requires_grad=False) for k,v in np_inputs.items()}
+      inputs = {k:Tensor(v.astype(np.float16), requires_grad=False) for k,v in np_inputs.items()}
       return inputs
 
     for _ in range(7):
@@ -68,6 +71,7 @@ class TestOnnxModel(unittest.TestCase):
       ps = stats.sort_stats(pstats.SortKey.TIME)
       ps.print_stats(30)
 
+  @unittest.skipUnless(is_dtype_supported(dtypes.float16), "need half")
   def test_openpilot_model(self):
     onnx_model = onnx.load(fetch(OPENPILOT_MODEL))
     run_onnx = OnnxRunner(onnx_model)
@@ -80,7 +84,7 @@ class TestOnnxModel(unittest.TestCase):
       "nav_features": np.zeros((1, 256)),
       "features_buffer": np.zeros((1, 99, 128)),
     }
-    inputs = {k:v.astype(np.float32) for k,v in inputs.items()}
+    inputs = {k:v.astype(np.float16) for k,v in inputs.items()}
 
     st = time.monotonic()
     print("****** run onnx ******")
@@ -97,7 +101,7 @@ class TestOnnxModel(unittest.TestCase):
     torch_out = run_onnx_torch(onnx_model, inputs).numpy()
     Tensor.no_grad = False
     print(tinygrad_out, torch_out)
-    np.testing.assert_allclose(tinygrad_out, torch_out, atol=1e-4, rtol=1e-2)
+    np.testing.assert_allclose(tinygrad_out, torch_out, atol=4e-2, rtol=4e-2)
 
   @unittest.skip("slow")
   def test_efficientnet(self):

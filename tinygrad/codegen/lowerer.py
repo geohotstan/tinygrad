@@ -3,7 +3,7 @@ import itertools, operator, math
 from dataclasses import dataclass
 from typing import cast
 from tinygrad.dtype import dtypes, PtrDType, least_upper_dtype
-from tinygrad.ops import KernelInfo, UOp, Ops, graph_rewrite, PatternMatcher, UPat, sint, sint_to_uop
+from tinygrad.ops import KernelInfo, UOp, Ops, graph_rewrite, PatternMatcher, UPat, sint, sint_to_uop, GroupOp
 from tinygrad.renderer import Renderer
 from tinygrad.helpers import all_int, prod, partition, flatten, unwrap, QUANTIZE
 from tinygrad.codegen.expander import expand_rewrite
@@ -234,8 +234,37 @@ pm_quant = symbolic+PatternMatcher([
     lambda v1,v2,c1,c2,r: r.replace(src=(v1*v2,)) + r.replace(src=(c2*v1,)) + r.replace(src=(c1*v2,)) + r.replace(src=(c1*c2,))),
 ])
 
+# **** push intermediate casts to f32 rightward to store ****
+# only pushing casts through GroupOP.ALUs
+f32_to_f16 = UPat.var("f32", dtype=dtypes.float32).cast(dtypes.half)
+other_f32_to_f16 = UPat.var("other_f32", dtype=dtypes.float32).cast(dtypes.half)
+other_half = UPat.any(UPat.var("other", dtype=dtypes.half), UPat.cvar("other", dtype=dtypes.half))
+pm_push_half_cast = PatternMatcher([
+  (UPat(GroupOp.Unary, src=(f32_to_f16,), name="x"), lambda x,f32: UOp(x.op, dtypes.float32, (f32,), x.arg).cast(dtypes.half)),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_f32_to_f16), dtype=dtypes.half, name="x"),
+   lambda x,f32,other_f32: f32.alu(x.op, other_f32).cast(dtypes.float16)),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_half), dtype=dtypes.half, name="x"),
+   lambda x,f32,other: f32.alu(x.op, other.cast(dtypes.float32)).cast(dtypes.float16)),
+  (UPat(GroupOp.Binary, src=(other_half, f32_to_f16), dtype=dtypes.half, name="x"),
+   lambda x,f32,other: other.cast(dtypes.float32).alu(x.op, f32).cast(dtypes.float16)),
+  (UPat(GroupOp.Binary, src=(other_half, f32_to_f16), dtype=dtypes.ints + (dtypes.bool,), name="x"),
+   lambda x,f32,other: other.cast(dtypes.float32).alu(x.op, f32)),
+  (UPat(GroupOp.Binary, src=(f32_to_f16, other_half), dtype=dtypes.ints + (dtypes.bool,), name="x"),
+   lambda x,f32,other: f32.alu(x.op, other.cast(dtypes.float32))),
+  (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_f32_to_f16), lambda cond,f32,other_f32: cond.where(f32, other_f32).cast(dtypes.half)),
+  (UPat.var("cond", dtype=dtypes.bool).where(f32_to_f16, other_half), lambda cond,f32,other:
+    cond.where(f32, other.cast(dtypes.float32)).cast(dtypes.half)),
+  (UPat.var("cond", dtype=dtypes.bool).where(other_half, f32_to_f16), lambda cond,f32,other:
+    cond.where(other.cast(dtypes.float32), f32).cast(dtypes.half)),
+  (UPat.var("cond", dtype=dtypes.bool).where(other_half, f32_to_f16), lambda cond,f32,other:
+    cond.where(other.cast(dtypes.float32), f32).cast(dtypes.half)),
+  # fold casts
+  (f32_to_f16.cast(dtypes.float32), lambda f32: f32)
+])
+
 def rewrite_shapetracker_with_index(ast:UOp, opts:Renderer) -> UOp:
   if QUANTIZE and opts.device in {"CPU", "DSP"}: ast = graph_rewrite(ast, pm_quant, name="quantize")
+  ast = graph_rewrite(ast, pm_push_half_cast, name="push_cast")
   sink = graph_rewrite(ast, pm_lowerer, ctx=get_index(ast, opts))
   # expand_rewrite turns this into a vectorized program
   return expand_rewrite(sink)
