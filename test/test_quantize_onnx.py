@@ -209,13 +209,13 @@ class TestQuantizeOnnx(unittest.TestCase):
     # ugh, it's so broken with those casts. need DONT_REALIZE_EXPAND=1 python3 test/test_quantize_onnx.py TestQuantizeOnnx.test_prequant
     tg_dtype = dtypes.int8 if xi == np.int8 else dtypes.uint8
     with Context(DONT_REALIZE_EXPAND=1):
-      out = (X.int().matmul(W.int()) / 1000).int()
+      out = (X.int().matmul(W.int())//1000)
       if clip: out = out.clip(dtypes.min(tg_dtype),dtypes.max(tg_dtype))
       out = out.cast(tg_dtype)
       opts = [Opt(op=OptOps.UPCAST, axis=1, arg=128), Opt(op=OptOps.UNROLL, axis=0, arg=4)] if opts is None else opts
       sexec(out, opts, replace_src, run_count=1)
     tout = out.numpy()
-    mout = ((m1.astype(np.int32) @ m2.astype(np.int32)) / 1000)
+    mout = ((m1.astype(np.int32) @ m2.astype(np.int32)) // 1000)
     if clip: mout = mout.clip(dtypes.min(tg_dtype),dtypes.max(tg_dtype))
     mout = mout.astype(xi)
     print(tout)

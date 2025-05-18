@@ -3484,17 +3484,6 @@ class Tensor(SimpleMathTrait):
     d = numerator.cast(least_upper_float(numerator.dtype)) * denominator.cast(least_upper_float(denominator.dtype)).reciprocal()
     output_dtype = numerator.dtype if dtypes.is_int(numerator.dtype) else d.dtype
     if dtypes.is_int(dt:=least_upper_dtype(numerator.dtype, denominator.dtype)) and rounding_mode is not None:
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print("HERE")
-      print(numerator.dtype, dt)
-      print(denominator.dtype, dt)
       numerator, denominator = numerator.cast(dt), denominator.cast(dt)
       if rounding_mode == "trunc": return numerator.idiv(denominator)
       if rounding_mode == "floor":
