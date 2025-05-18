@@ -3493,8 +3493,8 @@ class Tensor(SimpleMathTrait):
       print("HERE")
       print("HERE")
       print("HERE")
-      print(numerator.dtype, numerator.numpy(), dt)
-      print(denominator.dtype, denominator.numpy(), dt)
+      print(numerator.dtype, dt)
+      print(denominator.dtype, dt)
       numerator, denominator = numerator.cast(dt), denominator.cast(dt)
       if rounding_mode == "trunc": return numerator.idiv(denominator)
       if rounding_mode == "floor":

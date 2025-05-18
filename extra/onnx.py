@@ -716,7 +716,7 @@ def get_onnx_ops():
     y_scale, y_zero_point = _prepare_quantize(x, y_scale, y_zero_point, axis, block_size)
     if out_dtype == dtypes.uchar:
       # this appears to work in practice, at least for uchar out_dtype. it folds with the quantize stuff
-      ret = _clamp_cast((x / y_scale + 0.4999999).int() + y_zero_point, out_dtype)
+      ret = _clamp_cast((x / y_scale + 0.4999999 + y_zero_point).int(), out_dtype)
     else:
       ret = _clamp_cast(((x / y_scale).round() + y_zero_point), out_dtype)
     return ret.contiguous()
