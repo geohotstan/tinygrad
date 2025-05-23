@@ -31,9 +31,9 @@ def dtype_parse(onnx_dtype: int) -> DType:
 def attribute_parse(onnx_attribute: AttributeProto):
   supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
     AttributeProto.FLOAT: lambda a: float(a.f), AttributeProto.INT: lambda a: int(a.i),
-    AttributeProto.STRING: lambda a: a.s.decode("utf-8"), AttributeProto.TENSOR: lambda a: buffer_parse(a.t),
+    AttributeProto.STRING: lambda a: (a.s.data().tobytes() if isinstance(a.s, Tensor) else a.s).decode("utf-8"), AttributeProto.TENSOR: lambda a: buffer_parse(a.t),
     AttributeProto.FLOATS: lambda a: tuple(float(x) for x in a.floats), AttributeProto.INTS: lambda a: tuple(int(x) for x in a.ints),
-    AttributeProto.STRINGS: lambda a: tuple(x.decode("utf-8") for x in a.strings)
+    AttributeProto.STRINGS: lambda a: tuple((x.data().tobytes() if isinstance(x, Tensor) else x).decode("utf-8") for x in a.strings)
   }
   unsupported = {
     AttributeProto.UNDEFINED, AttributeProto.GRAPH, AttributeProto.SPARSE_TENSOR, AttributeProto.TYPE_PROTO, AttributeProto.TENSORS,
@@ -51,7 +51,7 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     if len(data) == 1: return Tensor(data[0], dtype=dtype).reshape(shape)
     return Tensor(data, dtype=dtype).reshape(shape).realize()
   if has_field(onnx_tensor, "raw_data"):
-    np_buffer = np.frombuffer(onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
+    np_buffer = np.frombuffer(onnx_tensor.raw_data.data().tobytes() if isinstance(onnx_tensor.raw_data, Tensor) else onnx_tensor.raw_data, dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
     if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
     return Tensor(np_buffer, dtype=dtype)
   return Tensor(None)

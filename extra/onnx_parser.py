@@ -1,8 +1,11 @@
 # https://github.com/onnx/onnx/blob/main/onnx/onnx.proto3
-
+from typing import Tuple
 import struct
+from io import BufferedReader
 from types import SimpleNamespace
-
+from tinygrad.nn.state import TensorIO, accept_filename
+from tinygrad.tensor import Tensor
+import numpy as np
 # Protobuf Wire Types
 WIRETYPE_VARINT = 0; WIRETYPE_FIXED64 = 1; WIRETYPE_LENGTH_DELIMITED = 2; WIRETYPE_START_GROUP = 3; WIRETYPE_END_GROUP = 4; WIRETYPE_FIXED32 = 5 # noqa: E702
 
@@ -16,13 +19,13 @@ class AttributeType:
   UNDEFINED = 0; FLOAT = 1; INT = 2; STRING = 3; TENSOR = 4; GRAPH = 5; SPARSE_TENSOR = 11; TYPE_PROTO = 13; FLOATS = 6; INTS = 7 # noqa: E702
   STRINGS = 8; TENSORS = 9; GRAPHS = 10; SPARSE_TENSORS = 12; TYPE_PROTOS = 14 # noqa: E702
 
-def decode_varint(data, offset):
+def decode_varint(data: Tensor, offset):
   result = 0
   shift = 0
   current_offset = offset
   while True:
     if current_offset >= len(data): raise EOFError("Buffer too short for varint")
-    byte = data[current_offset]
+    byte = data[current_offset].data().tolist()
     current_offset += 1
     result |= (byte & 0x7F) << shift
     if not (byte & 0x80): return result, current_offset
@@ -55,10 +58,10 @@ def dict_to_namespace(d):
   elif isinstance(d, list): return [dict_to_namespace(i) for i in d]
   else: return d
 
-def onnx_load(model_path):
+@accept_filename
+def onnx_load(tensor: Tensor):
   parser = OnnxParser()
-  with open(model_path, "rb") as f:
-    onnx_model = parser.parse_model_proto_from_bytes(f.read())
+  onnx_model = parser.parse_model_proto_from_bytes(tensor)
   model = dict_to_namespace(onnx_model)
   return model
 
@@ -86,10 +89,10 @@ class OnnxParser:
   def _handle_int32_field(self, obj, key_name, data, offset, wire_type, parser_func=None, is_repeated=False):
     return self._handle_int64_field(obj, key_name, data, offset, wire_type, is_repeated)
 
-  def _handle_float_field(self, obj, key_name, data, offset, wire_type, parser_func=None, is_repeated=False):
+  def _handle_float_field(self, obj, key_name, data: Tensor, offset, wire_type, parser_func=None, is_repeated=False):
     if wire_type != WIRETYPE_FIXED32: raise ValueError(f"Expected fixed32 for float field '{key_name}'")
     if offset + 4 > len(data): raise EOFError("Buffer too short for float")
-    val, = struct.unpack("<f", data[offset:offset+4])
+    val, = struct.unpack("<f", data[offset:offset+4].data().tobytes())
     gen_result(obj, key_name, val, is_repeated)
     return offset + 4
 
@@ -105,7 +108,7 @@ class OnnxParser:
     return res
 
   # WIRETYPE_LENGTH_DELIMITED
-  def _handle_delimited(self, data, offset):
+  def _handle_delimited(self, data, offset) -> Tuple[Tensor, int]:
     str_len, after_len_offset = decode_varint(data, offset)
     new_offset = after_len_offset
     if new_offset + str_len > len(data): raise EOFError("Buffer too short")
@@ -115,6 +118,7 @@ class OnnxParser:
   def _handle_string_field(self, obj, key_name, data, offset, wire_type, parser_func=None, is_repeated=False):
     if wire_type != WIRETYPE_LENGTH_DELIMITED: raise ValueError(f"Expected length-delimited for string field '{key_name}'")
     value, off = self._handle_delimited(data, offset)
+    value = value.data().tobytes()
     value = value.decode('utf-8')
     gen_result(obj, key_name, value, is_repeated)
     return off
@@ -129,7 +133,7 @@ class OnnxParser:
     if wire_type != WIRETYPE_LENGTH_DELIMITED: raise ValueError("Packed floats expected length_delimited")
     value, off = self._handle_delimited(data, offset)
     if len(value) % 4 != 0: raise ValueError("Packed float data length not multiple of 4")
-    values = list(struct.unpack(f"<{len(value) // 4}f", value))
+    values = list(struct.unpack(f"<{len(value) // 4}f", value.data().tobytes()))
     obj.setdefault(key_name, []).extend(values)
     return off
 
@@ -216,15 +220,15 @@ class OnnxParser:
     dims = tensor_obj.get('dims', [])
     num_elements = 1
     for d in dims: num_elements *= d
-    if not dims and not raw_bytes: return
+    if not dims and not raw_bytes.data().tobytes(): return
     if num_elements == 0 and raw_bytes and not dims: num_elements = 1
     decoded_data = []
     if data_type == TensorDataType.FLOAT:
       if len(raw_bytes) != num_elements * 4: raise ValueError(f"FLOAT raw data size mismatch: expected {num_elements*4}, got {len(raw_bytes)}")
-      decoded_data = list(struct.unpack(f"<{num_elements}f", raw_bytes))
+      decoded_data = list(struct.unpack(f"<{num_elements}f", raw_bytes.data().tobytes()))
     elif data_type == TensorDataType.INT64:
       if len(raw_bytes) != num_elements * 8: raise ValueError(f"INT64 raw data size mismatch: expected {num_elements*8}, got {len(raw_bytes)}")
-      decoded_data = list(struct.unpack(f"<{num_elements}q", raw_bytes))
+      decoded_data = list(struct.unpack(f"<{num_elements}q", raw_bytes.data().tobytes()))
     else:
       tensor_obj['_warning'] = f"Raw data interpretation for data_type {data_type} not fully implemented."
       decoded_data = "SKIPPED_RAW_DATA_INTERPRETATION"
@@ -269,7 +273,7 @@ class OnnxParser:
       self._handle_string_field: ((2, "producer_name"), (3, "producer_version"), (4, "domain"), (6, "doc_string")),
       self._handle_sub_message_field: ((8, "opset_import", True,  self.parse_opset_id_proto), (7, "graph", False, self.parse_graph_proto),
                                        (14, "metadata_props", True, self.parse_string_string_entry_proto))})
-  def parse_model_proto_from_bytes(self, data_bytes):
-    parsed_model, _ = self._parse_message(data_bytes, 0, self._model_proto_handlers(),
+  def parse_model_proto_from_bytes(self, tensor: Tensor):
+    parsed_model, _ = self._parse_message(tensor, 0, self._model_proto_handlers(),
                                           lambda: {'opset_import': [], 'metadata_props': [], 'domain': None})
     return parsed_model
