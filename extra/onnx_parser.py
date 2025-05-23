@@ -92,7 +92,7 @@ class OnnxParser:
   def _handle_float_field(self, obj, key_name, data: Tensor, offset, wire_type, parser_func=None, is_repeated=False):
     if wire_type != WIRETYPE_FIXED32: raise ValueError(f"Expected fixed32 for float field '{key_name}'")
     if offset + 4 > len(data): raise EOFError("Buffer too short for float")
-    val, = struct.unpack("<f", data[offset:offset+4].data().tobytes())
+    val, = struct.unpack("<f", data[offset:offset+4].data())
     gen_result(obj, key_name, val, is_repeated)
     return offset + 4
 
@@ -133,7 +133,7 @@ class OnnxParser:
     if wire_type != WIRETYPE_LENGTH_DELIMITED: raise ValueError("Packed floats expected length_delimited")
     value, off = self._handle_delimited(data, offset)
     if len(value) % 4 != 0: raise ValueError("Packed float data length not multiple of 4")
-    values = list(struct.unpack(f"<{len(value) // 4}f", value.data().tobytes()))
+    values = list(struct.unpack(f"<{len(value) // 4}f", value.data()))
     obj.setdefault(key_name, []).extend(values)
     return off
 
@@ -220,15 +220,15 @@ class OnnxParser:
     dims = tensor_obj.get('dims', [])
     num_elements = 1
     for d in dims: num_elements *= d
-    if not dims and not raw_bytes.data().tobytes(): return
+    if not dims and not raw_bytes.data(): return
     if num_elements == 0 and raw_bytes and not dims: num_elements = 1
     decoded_data = []
     if data_type == TensorDataType.FLOAT:
       if len(raw_bytes) != num_elements * 4: raise ValueError(f"FLOAT raw data size mismatch: expected {num_elements*4}, got {len(raw_bytes)}")
-      decoded_data = list(struct.unpack(f"<{num_elements}f", raw_bytes.data().tobytes()))
+      decoded_data = list(struct.unpack(f"<{num_elements}f", raw_bytes.data()))
     elif data_type == TensorDataType.INT64:
       if len(raw_bytes) != num_elements * 8: raise ValueError(f"INT64 raw data size mismatch: expected {num_elements*8}, got {len(raw_bytes)}")
-      decoded_data = list(struct.unpack(f"<{num_elements}q", raw_bytes.data().tobytes()))
+      decoded_data = list(struct.unpack(f"<{num_elements}q", raw_bytes.data()))
     else:
       tensor_obj['_warning'] = f"Raw data interpretation for data_type {data_type} not fully implemented."
       decoded_data = "SKIPPED_RAW_DATA_INTERPRETATION"
