@@ -1,9 +1,9 @@
 from typing import Any, Sequence, cast, Literal, Callable
-import dataclasses, functools, io, math, types
+import dataclasses, functools, io, math, types, warnings
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple, argsort
 from tinygrad.dtype import DType, ConstType, dtypes
-from tinygrad.device import is_dtype_supported
+from tinygrad.device import is_dtype_supported, Device
 
 # ***** protobuf parsing ******
 from onnx import AttributeProto, ModelProto, TensorProto, TypeProto, helper
@@ -21,7 +21,11 @@ def dtype_parse(onnx_dtype: int) -> DType:
     TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return supported[onnx_dtype] if is_dtype_supported(supported[onnx_dtype]) else dtypes.float
+  if not is_dtype_supported(dtype := supported[onnx_dtype]):
+    default_dtype = dtypes.default_int if dtypes.is_int(dtype) else dtypes.default_float
+    warnings.warn(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}", RuntimeWarning)
+    dtype = default_dtype
+  return dtype
 
 def attribute_parse(onnx_attribute: AttributeProto):
   supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
@@ -130,10 +134,10 @@ class OnnxRunner:
       if not isinstance(value, Sequence): raise RuntimeError(f"{name} received {value}, expected a sequence type")
       sequence = [Tensor(v, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(v, Tensor) else v for v in value]
       if not all_same(tuple(t.shape for t in sequence)): raise RuntimeError(f"Shapes for {name} sequence must be homogeneous")
-      if not all(t.dtype is spec.dtype for t in sequence): raise RuntimeError(f"Dtypes for {name} sequence must be all be {spec.dtype}")
+      if not all(t.dtype is spec.dtype for t in sequence): warnings.warn(f"Dtypes for {name} sequence aren't all {spec.dtype}", RuntimeWarning)
       return sequence
     tensor = Tensor(value, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(value, Tensor) else value
-    if tensor.dtype is not spec.dtype: raise RuntimeError(f"{name} has mismatch on dtype. Expected {spec.dtype}, received {tensor.dtype}.")
+    if tensor.dtype is not spec.dtype: warnings.warn(f"{name} has mismatch on dtype. Expected {spec.dtype}, received {tensor.dtype}.", RuntimeWarning)
     for dim, (onnx_dim, user_dim_input) in enumerate(zip(spec.shape, tensor.shape, strict=True)):
       if isinstance(onnx_dim, str):
         onnx_dim = self.variable_dims[onnx_dim] if onnx_dim in self.variable_dims else self.variable_dims.setdefault(onnx_dim, int(user_dim_input))
