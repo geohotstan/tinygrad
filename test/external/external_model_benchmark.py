@@ -8,7 +8,7 @@ import onnxruntime as ort
 from onnx2torch import convert
 from tinygrad.frontend.onnx import OnnxRunner
 from tinygrad.helpers import OSX, DEBUG, fetch, getenv
-from tinygrad import Tensor, Device
+from tinygrad import Tensor, Device, dtypes
 
 MODELS = {
   "resnet50": "https://github.com/onnx/models/raw/main/validated/vision/classification/resnet/model/resnet50-caffe2-v1-9.onnx",
@@ -45,6 +45,15 @@ def benchmark(mnm, nm, fxn):
 #BASE = pathlib.Path(__file__).parents[2] / "weights" / "onnx"
 BASE = pathlib.Path("/tmp/onnx")
 def benchmark_model(m, devices, validate_outs=False):
+  def run_onnx_tinygrad(runner, inputs):
+    # run models that aren't half normally
+    half_models = ["openpilot", "commavq"]
+    if m not in half_models: return runner(inputs)
+    # run half models with forced float inputs with results casted back to half
+    inputs = {k:Tensor(v) if not isinstance(v, Tensor) else v for k,v in inputs.items()}
+    inputs = {k:v.cast(dtypes.float32) if v.dtype is dtypes.half else v for k,v in inputs.items()}
+    return {k:v.cast(dtypes.half) if v.dtype is dtypes.float32 else v for k,v in runner(inputs).items()}
+
   torch.manual_seed(1)
   global open_csv, CSV
   CSV = {"model": m}
@@ -55,7 +64,6 @@ def benchmark_model(m, devices, validate_outs=False):
   excluded = {inp.name for inp in onnx_model.graph.initializer}
   input_shapes = {inp.name:tuple(x.dim_value if x.dim_value != 0 else 1 for x in inp.type.tensor_type.shape.dim) for inp in onnx_model.graph.input if inp.name not in excluded}  # noqa: E501
   input_types = {inp.name: tensor_dtype_to_np_dtype(inp.type.tensor_type.elem_type) for inp in onnx_model.graph.input if inp.name not in excluded}
-  #input_types = {k:v if v!=np.float16 else np.float32 for k,v in input_types.items()}  # cast
   np_inputs = {k:torch.randn(shp).numpy().astype(input_types[k]) for k,shp in input_shapes.items()}
   assert len(input_shapes) < 30, f"too many input shapes {len(input_shapes)}"
 
@@ -65,6 +73,7 @@ def benchmark_model(m, devices, validate_outs=False):
     Device.DEFAULT = device
     inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
     tinygrad_model = OnnxRunner(onnx_model)
+    run_onnx_tinygrad(tinygrad_model, inputs)
     benchmark(m, f"tinygrad_{device.lower()}_jitless", lambda: {k:v.numpy() for k,v in tinygrad_model(inputs).items()})
 
     from tinygrad.engine.jit import TinyJit
@@ -109,7 +118,7 @@ def benchmark_model(m, devices, validate_outs=False):
       Device.DEFAULT = device
       inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
       tinygrad_model = OnnxRunner(onnx_model)
-      tinygrad_out = tinygrad_model(inputs)
+      tinygrad_out = run_onnx_tinygrad(tinygrad_model, inputs)
 
       ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])
       onnx_out = ort_sess.run(output_names, np_inputs)
