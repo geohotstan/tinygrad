@@ -2,12 +2,11 @@ import csv, pathlib, time
 import numpy as np
 import torch
 torch.set_num_threads(1)
-import onnx
-from onnx.helper import tensor_dtype_to_np_dtype
 import onnxruntime as ort
 from onnx2torch import convert
 from tinygrad.frontend.onnx import OnnxRunner
 from tinygrad.helpers import OSX, DEBUG, fetch, getenv
+from tinygrad.dtype import _to_np_dtype
 from tinygrad import Tensor, Device
 
 MODELS = {
@@ -50,21 +49,20 @@ def benchmark_model(m, devices, validate_outs=False):
   CSV = {"model": m}
 
   fn = fetch(MODELS[m])
-  onnx_model = onnx.load(fn)
-  output_names = [out.name for out in onnx_model.graph.output]
-  excluded = {inp.name for inp in onnx_model.graph.initializer}
-  input_shapes = {inp.name:tuple(x.dim_value if x.dim_value != 0 else 1 for x in inp.type.tensor_type.shape.dim) for inp in onnx_model.graph.input if inp.name not in excluded}  # noqa: E501
-  input_types = {inp.name: tensor_dtype_to_np_dtype(inp.type.tensor_type.elem_type) for inp in onnx_model.graph.input if inp.name not in excluded}
+  tinygrad_model = OnnxRunner(fn)
+  output_names = tinygrad_model.graph_outputs
+  input_shapes = {name:tuple(s if isinstance(s, int) else 1 for s in spec.shape) for name, spec in tinygrad_model.graph_inputs.items()}
+  input_types = {name:_to_np_dtype(spec.dtype) for name, spec in tinygrad_model.graph_inputs.items()}
   #input_types = {k:v if v!=np.float16 else np.float32 for k,v in input_types.items()}  # cast
   np_inputs = {k:torch.randn(shp).numpy().astype(input_types[k]) for k,shp in input_shapes.items()}
   assert len(input_shapes) < 30, f"too many input shapes {len(input_shapes)}"
 
   # print input names
-  if DEBUG >= 2: print([inp.name for inp in onnx_model.graph.input if inp.name not in excluded])
+  if DEBUG >= 2: print(list(tinygrad_model.graph_inputs))
   for device in devices:
     Device.DEFAULT = device
+    tinygrad_model = OnnxRunner(fn)
     inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
-    tinygrad_model = OnnxRunner(onnx_model)
     benchmark(m, f"tinygrad_{device.lower()}_jitless", lambda: {k:v.numpy() for k,v in tinygrad_model(inputs).items()})
 
     from tinygrad.engine.jit import TinyJit
@@ -75,7 +73,7 @@ def benchmark_model(m, devices, validate_outs=False):
 
   # convert model to torch
   try:
-    torch_model = convert(onnx_model)
+    torch_model = convert(fn)
   except Exception as e:
     # model conversion failed
     print(f"{m:16s}onnx2torch {type(e).__name__:>25}")
@@ -108,7 +106,7 @@ def benchmark_model(m, devices, validate_outs=False):
       rtol, atol = 2e-3, 2e-3  # tolerance for fp16 models
       Device.DEFAULT = device
       inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
-      tinygrad_model = OnnxRunner(onnx_model)
+      tinygrad_model = OnnxRunner(fn)
       tinygrad_out = tinygrad_model(inputs)
 
       ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])

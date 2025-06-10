@@ -1,4 +1,4 @@
-import unittest
+import tempfile, unittest
 from typing import Any, Tuple
 from onnx.backend.base import Backend, BackendRep
 import onnx.backend.test
@@ -25,12 +25,14 @@ class TinygradModel(BackendRep):
 
 class TinygradBackend(Backend):
   @classmethod
-  def prepare(cls, model, device):
+  def prepare(cls, model: onnx.ModelProto, device):
     input_all = [x.name for x in model.graph.input]
     input_initializer = [x.name for x in model.graph.initializer]
     net_feed_input = [x for x in input_all if x not in input_initializer]
     print("prepare", cls, device, net_feed_input)
-    run_onnx = OnnxRunner(model)
+    with tempfile.NamedTemporaryFile(suffix='.onnx') as f:
+      onnx.save(model, f.name)
+      run_onnx = OnnxRunner(f.name)
     return TinygradModel(run_onnx, net_feed_input)
 
   @classmethod
