@@ -27,7 +27,6 @@ def dtype_parse(onnx_dtype: int) -> DType:
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
   if not is_dtype_supported(dtype := supported[onnx_dtype]):
-    print(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}")
     default_dtype = dtypes.default_int if dtypes.is_int(dtype) else dtypes.default_float
     warnings.warn(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}")
     return default_dtype
@@ -62,11 +61,6 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     if len(data) == 1: return Tensor(data.tolist()[0], dtype=dtype).reshape(shape)
     return data.cast(dtype).reshape(shape).to(Device.DEFAULT)
   if has_field(onnx_tensor, "raw_data"):
-    if onnx_tensor.data_type == TensorProto.FLOAT16:
-      np_buffer = np.frombuffer(onnx_tensor.raw_data.data().tobytes(),
-                                dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
-      if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
-      return Tensor(np_buffer, dtype=dtype)
     ret = onnx_tensor.raw_data.bitcast(dtype).reshape(shape).to(Device.DEFAULT)
     if shape == (): ret = Tensor(ret.item(), dtype=dtype).reshape(shape)
     return ret
