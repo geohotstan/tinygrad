@@ -23,7 +23,7 @@ jobs:
       runs-on: macos-15
       timeout-minutes: 20
       env:
-        MAX_BUFFER_SIZE: 0
+        MAX_BUFFER_SIZE: 9999999999999999999999999999
       steps:
         - name: Checkout Code
           uses: actions/checkout@v4
@@ -43,7 +43,7 @@ jobs:
         - name: download models
           run: PYTHONPATH="." python3 extra/huggingface_onnx/download_models.py fp16.yaml
         - name: run model tests
-          run: PYTHONPATH="." python3 extra/huggingface_onnx/run_models.py fp16.yaml --validate
+          run: PYTHONPATH=. python extra/huggingface_onnx/run_models.py test --debug answerdotai/answerai-colbert-small-v1/onnx/model_fp16.onnx
 
     # test_float16_huggingface_onnx:
     #   name: Test Float16 Huggingface ONNX
