@@ -27,6 +27,7 @@ def dtype_parse(onnx_dtype: int) -> DType:
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
   if not is_dtype_supported(dtype := supported[onnx_dtype]):
+    print(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}")
     default_dtype = dtypes.default_int if dtypes.is_int(dtype) else dtypes.default_float
     warnings.warn(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}")
     return default_dtype
