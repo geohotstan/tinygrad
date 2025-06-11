@@ -1,0 +1,117 @@
+repositories:
+  answerdotai/answerai-colbert-small-v1:
+    url: https://huggingface.co/answerdotai/answerai-colbert-small-v1
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 66.73MB
+  jinaai/jina-embeddings-v3:
+    url: https://huggingface.co/jinaai/jina-embeddings-v3
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 1147.15MB
+  mixedbread-ai/mxbai-embed-large-v1:
+    url: https://huggingface.co/mixedbread-ai/mxbai-embed-large-v1
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 668.83MB
+  Supabase/gte-small:
+    url: https://huggingface.co/Supabase/gte-small
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 66.75MB
+  llava-hf/llava-onevision-qwen2-0.5b-ov-hf:
+    url: https://huggingface.co/llava-hf/llava-onevision-qwen2-0.5b-ov-hf
+    download_path: null
+    files:
+    - file: onnx/embed_tokens_fp16.onnx
+      size: 272.38MB
+    - file: onnx/vision_encoder_fp16.onnx
+      size: 799.77MB
+  WhereIsAI/UAE-Large-V1:
+    url: https://huggingface.co/WhereIsAI/UAE-Large-V1
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 668.83MB
+  nomic-ai/nomic-embed-text-v1.5:
+    url: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 273.86MB
+  Alibaba-NLP/gte-large-en-v1.5:
+    url: https://huggingface.co/Alibaba-NLP/gte-large-en-v1.5
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 873.33MB
+  Alibaba-NLP/gte-base-en-v1.5:
+    url: https://huggingface.co/Alibaba-NLP/gte-base-en-v1.5
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 278.21MB
+  Xenova/bge-base-en-v1.5:
+    url: https://huggingface.co/Xenova/bge-base-en-v1.5
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 218.11MB
+  answerdotai/ModernBERT-base:
+    url: https://huggingface.co/answerdotai/ModernBERT-base
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 299.69MB
+  Xenova/all-MiniLM-L6-v2:
+    url: https://huggingface.co/Xenova/all-MiniLM-L6-v2
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 45.30MB
+  Marqo/marqo-fashionSigLIP:
+    url: https://huggingface.co/Marqo/marqo-fashionSigLIP
+    download_path: null
+    files:
+    - file: onnx/text_model_fp16.onnx
+      size: 220.82MB
+    - file: onnx/vision_model_fp16.onnx
+      size: 185.95MB
+  Snowflake/snowflake-arctic-embed-m:
+    url: https://huggingface.co/Snowflake/snowflake-arctic-embed-m
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 218.11MB
+  jinaai/jina-reranker-v2-base-multilingual:
+    url: https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 557.16MB
+  briaai/RMBG-1.4:
+    url: https://huggingface.co/briaai/RMBG-1.4
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 88.22MB
+  ds4sd/SmolDocling-256M-preview:
+    url: https://huggingface.co/ds4sd/SmolDocling-256M-preview
+    download_path: null
+    files:
+    - file: onnx/embed_tokens_fp16.onnx
+      size: 56.77MB
+    - file: onnx/vision_encoder_fp16.onnx
+      size: 187.30MB
+  Snowflake/snowflake-arctic-embed-xs:
+    url: https://huggingface.co/Snowflake/snowflake-arctic-embed-xs
+    download_path: null
+    files:
+    - file: onnx/model_fp16.onnx
+      size: 45.30MB
+total_size: 7.24GB
+created_at: '2025-06-11T03:19:25Z'

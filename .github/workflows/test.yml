@@ -29,8 +29,8 @@ jobs:
           uses: ./.github/actions/setup-tinygrad
           with:
             key: macos-${{ matrix.backend }}-minimal
-            deps: testing
-            pydeps: "huggingface_hub"
+            deps: testing-minimal
+            pydeps: "huggingface_hub PyYAML onnxruntime onnx"
             llvm: ${{ matrix.backend == 'llvm' && 'true' }}
         - name: Set env
           run: printf "${{ matrix.backend == 'llvm' && 'LLVM=1' || matrix.backend == 'cpu' && 'CPU=1' || matrix.backend == 'metal' && 'METAL=1'}}" >> $GITHUB_ENV
@@ -38,12 +38,10 @@ jobs:
           run: |
             python -c "from tinygrad import Device; assert Device.DEFAULT == '${{ matrix.backend }}'.upper(), Device.DEFAULT"
             DEBUG=4 python3 test/test_tiny.py TestTiny.test_plus
-        - name: collect metadata
-          run: python3 extra/huggingface_onnx/collect_metadata.py --limit 100 --output fp16.yaml
         - name: download models
-          run: python3 extra/huggingface_onnx/download_models.py extra/huggingface_onnx/fp16.yaml
+          run: python3 extra/huggingface_onnx/download_models.py fp16.yaml
         - name: run model tests
-          run: python3 extra/huggingface_onnx/run_models.py extra/huggingface_onnx/fp16.yaml --validate
+          run: PYTHONPATH="." python3 extra/huggingface_onnx/run_models.py fp16.yaml --validate
 
     # test_float16_huggingface_onnx:
     #   name: Test Float16 Huggingface ONNX
