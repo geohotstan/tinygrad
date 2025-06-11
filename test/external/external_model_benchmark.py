@@ -27,6 +27,7 @@ MODELS = {
   # really slow
   # "resnet18": "https://github.com/onnx/models/raw/main/archive/vision/classification/resnet/model/resnet18-v2-7.onnx",
 }
+half_models = ["openpilot", "commavq"]
 
 CSV = {}
 open_csv = None
@@ -44,15 +45,6 @@ def benchmark(mnm, nm, fxn):
 #BASE = pathlib.Path(__file__).parents[2] / "weights" / "onnx"
 BASE = pathlib.Path("/tmp/onnx")
 def benchmark_model(m, devices, validate_outs=False):
-  def run_onnx_tinygrad(runner, inputs):
-    # run models that aren't half normally
-    half_models = ["openpilot", "commavq"]
-    if m not in half_models: return runner(inputs)
-    # run half models with forced float inputs with results casted back to half
-    inputs = {k:Tensor(v) if not isinstance(v, Tensor) else v for k,v in inputs.items()}
-    inputs = {k:v.cast(dtypes.float32) if v.dtype is dtypes.half else v for k,v in inputs.items()}
-    return {k:v.cast(dtypes.half) if v.dtype is dtypes.float32 else v for k,v in runner(inputs).items()}
-
   torch.manual_seed(1)
   global open_csv, CSV
   CSV = {"model": m}
@@ -72,7 +64,6 @@ def benchmark_model(m, devices, validate_outs=False):
     Device.DEFAULT = device
     inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
     tinygrad_model = OnnxRunner(onnx_model)
-    run_onnx_tinygrad(tinygrad_model, inputs)
     benchmark(m, f"tinygrad_{device.lower()}_jitless", lambda: {k:v.numpy() for k,v in tinygrad_model(inputs).items()})
 
     from tinygrad.engine.jit import TinyJit
@@ -115,10 +106,13 @@ def benchmark_model(m, devices, validate_outs=False):
     for device in devices:
       rtol, atol = 2e-3, 2e-3  # tolerance for fp16 models
       Device.DEFAULT = device
-      inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
+      # force half inputs to float for numerical stability when validating
+      if m in half_models:
+        inputs = {k:Tensor(inp, dtype=dtypes.float32) if inp.dtype == np.float16 else Tensor(inp) for k,inp in np_inputs.items()}
+      else:
+        inputs = {k:Tensor(inp) for k,inp in np_inputs.items()}
       tinygrad_model = OnnxRunner(onnx_model)
-      tinygrad_out = run_onnx_tinygrad(tinygrad_model, inputs)
-
+      tinygrad_out = tinygrad_model(inputs)
       ort_sess = ort.InferenceSession(str(fn), ort_options, ["CPUExecutionProvider"])
       onnx_out = ort_sess.run(output_names, np_inputs)
       onnx_out = dict([*list(zip(output_names, onnx_out))])
