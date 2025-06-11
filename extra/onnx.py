@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 from typing import Any, Sequence, cast, Literal, Callable
-import dataclasses, functools, io, math, types
+import dataclasses, functools, io, math, types, warnings
 from tinygrad.tensor import Tensor, _broadcast_shape, ReductionStr
 from tinygrad.helpers import getenv, DEBUG, all_same, prod, flatten, make_tuple, argsort
-from tinygrad.dtype import DType, ConstType, dtypes, ImageDType
+from tinygrad.dtype import DType, ConstType, dtypes, _from_np_dtype
 from tinygrad.device import is_dtype_supported, Device
 
 # ***** protobuf parsing ******
@@ -18,7 +18,7 @@ def dtype_parse(onnx_dtype: int) -> DType:
   supported: dict[int, DType] = {
     TensorProto.FLOAT:dtypes.float32, TensorProto.UINT8:dtypes.uint8, TensorProto.INT8:dtypes.int8,
     TensorProto.UINT16:dtypes.uint16, TensorProto.INT16:dtypes.int16, TensorProto.INT32:dtypes.int32, TensorProto.INT64:dtypes.int64,
-    TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float32, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
+    TensorProto.BOOL:dtypes.bool, TensorProto.FLOAT16:dtypes.float16, TensorProto.DOUBLE:dtypes.double, TensorProto.UINT32:dtypes.uint32,
     TensorProto.UINT64:dtypes.uint64, TensorProto.BFLOAT16:dtypes.bfloat16,
   }
   unsupported = {
@@ -26,7 +26,11 @@ def dtype_parse(onnx_dtype: int) -> DType:
     TensorProto.FLOAT8E5M2, TensorProto.FLOAT8E5M2FNUZ, TensorProto.UINT4, TensorProto.INT4
   }
   if onnx_dtype in unsupported: raise NotImplementedError(f"onnx dtype {TensorProto.DataType.Name(onnx_dtype)} is not supported")
-  return supported[onnx_dtype] if is_dtype_supported(supported[onnx_dtype]) else dtypes.float
+  if not is_dtype_supported(dtype := supported[onnx_dtype]):
+    default_dtype = dtypes.default_int if dtypes.is_int(dtype) else dtypes.default_float
+    warnings.warn(f"dtype {dtype} on {Device.DEFAULT} is not supported, falling back to {default_dtype}")
+    return default_dtype
+  return dtype
 
 def attribute_parse(onnx_attribute: AttributeProto):
   supported: dict[AttributeProto.AttributeType, Callable[[AttributeProto], Any]] = {
@@ -57,11 +61,6 @@ def buffer_parse(onnx_tensor: TensorProto) -> Tensor:
     if len(data) == 1: return Tensor(data.tolist()[0], dtype=dtype).reshape(shape)
     return data.cast(dtype).reshape(shape).to(Device.DEFAULT)
   if has_field(onnx_tensor, "raw_data"):
-    if onnx_tensor.data_type == TensorProto.FLOAT16:
-      np_buffer = np.frombuffer(onnx_tensor.raw_data.data().tobytes(),
-                                dtype=helper.tensor_dtype_to_np_dtype(onnx_tensor.data_type)).copy().reshape(shape)
-      if np_buffer.size == 1: return Tensor(np_buffer.item(), dtype=dtype).reshape(shape)
-      return Tensor(np_buffer, dtype=dtype)
     ret = onnx_tensor.raw_data.bitcast(dtype).reshape(shape).to(Device.DEFAULT)
     if shape == (): ret = Tensor(ret.item(), dtype=dtype).reshape(shape)
     return ret
@@ -143,13 +142,15 @@ class OnnxRunner:
 
   def _parse_input(self, name: str, value: Any, spec: OnnxValue):
     if spec.is_optional and value is None: return None
-    # TODO: need true float16 for dtype checking
     if spec.is_sequence:
       if not isinstance(value, Sequence): raise RuntimeError(f"{name} received {value}, expected a sequence type")
       sequence = [Tensor(v, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(v, Tensor) else v for v in value]
       if not all_same(tuple(t.shape for t in sequence)): raise RuntimeError(f"Shapes for {name} sequence must be homogeneous")
+      if not all(t.dtype is spec.dtype for t in sequence): warnings.warn(f"Dtypes for {name} sequence aren't all {spec.dtype}")
       return sequence
-    tensor = Tensor(value, dtype=spec.dtype, requires_grad=self.is_training) if not isinstance(value, Tensor) else value
+    dtype = _from_np_dtype(value.dtype) if str(type(value)) == "<class 'numpy.ndarray'>" else spec.dtype
+    tensor = Tensor(value, dtype=dtype, requires_grad=self.is_training) if not isinstance(value, Tensor) else value
+    if tensor.dtype is not spec.dtype: warnings.warn(f"{name} has mismatch on dtype. Expected {spec.dtype}, received {tensor.dtype}.")
     for dim, (onnx_dim, user_dim_input) in enumerate(zip(spec.shape, tensor.shape, strict=True)):
       if isinstance(onnx_dim, str):
         onnx_dim = self.variable_dims[onnx_dim] if onnx_dim in self.variable_dims else self.variable_dims.setdefault(onnx_dim, int(user_dim_input))
@@ -317,7 +318,7 @@ def get_onnx_ops():
   def Binarizer(x:Tensor, threshold:float=0.0): return (x > threshold).float()
 
   # ***** Unary Ops (broadcasted) *****
-  def Add(x:Tensor,y:Tensor, broadcast=None, axis=None): return x + y if x.dtype == dtypes.float or isinstance(x.dtype, ImageDType) else (x + y).cast(x.dtype)
+  def Add(x:Tensor,y:Tensor, broadcast=None, axis=None): return x + y
   def Sub(x:Tensor|int,y:Tensor): return x - y # some test has input as int
   def Div(x:Tensor,y:Tensor): return x.div(y, rounding_mode='trunc' if dtypes.is_int(x.dtype) else None)
   def Less(x:Tensor,y:Tensor): return x < y
