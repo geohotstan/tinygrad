@@ -39,7 +39,7 @@ jobs:
             python -c "from tinygrad import Device; assert Device.DEFAULT == '${{ matrix.backend }}'.upper(), Device.DEFAULT"
             DEBUG=4 python3 test/test_tiny.py TestTiny.test_plus
         - name: download models
-          run: python3 extra/huggingface_onnx/download_models.py fp16.yaml
+          run: PYTHONPATH="." python3 extra/huggingface_onnx/download_models.py fp16.yaml
         - name: run model tests
           run: PYTHONPATH="." python3 extra/huggingface_onnx/run_models.py fp16.yaml --validate
 
