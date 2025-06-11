@@ -22,8 +22,6 @@ jobs:
       name: MacOS (${{ matrix.backend }})
       runs-on: macos-15
       timeout-minutes: 20
-      env:
-        IGNORE_OOB: 0
       steps:
         - name: Checkout Code
           uses: actions/checkout@v4
@@ -32,7 +30,7 @@ jobs:
           with:
             key: macos-${{ matrix.backend }}-minimal
             deps: testing
-            pydeps: "yaml huggingface_hub"
+            pydeps: "huggingface_hub"
             llvm: ${{ matrix.backend == 'llvm' && 'true' }}
         - name: Set env
           run: printf "${{ matrix.backend == 'llvm' && 'LLVM=1' || matrix.backend == 'cpu' && 'CPU=1' || matrix.backend == 'metal' && 'METAL=1'}}" >> $GITHUB_ENV
