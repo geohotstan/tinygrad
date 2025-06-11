@@ -5,7 +5,7 @@ from tinygrad.helpers import tqdm
 
 HUGGINGFACE_URL = "https://huggingface.co"
 SKIPPED_FILES = [
-  "int8", "uint8", "quantized",      # numerical accuracy issues
+  "fp16", "int8", "uint8", "quantized",      # numerical accuracy issues
   "avx2", "arm64", "avx512", "avx512_vnni",  # numerical accuracy issues
   "q4", "q4f16", "bnb4",                     # unimplemented quantization
   "model_O4",                                # requires non cpu ort runner and MemcpyFromHost op
@@ -54,7 +54,6 @@ def get_metadata(repos:list[str]) -> dict:
       filename = file.rfilename
       if not (filename.endswith('.onnx') or filename.endswith('.onnx_data')): continue
       if any(skip_str in filename for skip_str in SKIPPED_FILES): continue
-      if "fp16" not in filename: continue
       head = requests.head(f"{HUGGINGFACE_URL}/{repo}/resolve/main/{filename}", allow_redirects=True)
       file_size = file.size or int(head.headers.get('Content-Length', 0))
       files_metadata.append({"file": filename, "size": f"{file_size/1e6:.2f}MB"})
