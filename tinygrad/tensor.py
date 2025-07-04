@@ -3842,7 +3842,8 @@ class Tensor(MathTrait):
     if num_classes == -1: num_classes = (self.max()+1).item()
     return self[..., None]._one_hot_along_dim(num_classes).where(1, 0)
 
-  def scaled_dot_product_attention(self, key:Tensor, value:Tensor, attn_mask:Tensor|None=None, dropout_p:float=0.0, is_causal:bool=False) -> Tensor:
+  def scaled_dot_product_attention(self, key:Tensor, value:Tensor, attn_mask:Tensor|None=None, dropout_p:float=0.0, is_causal:bool=False,
+                                   enable_gqa:bool=False) -> Tensor:
     """
     Computes scaled dot-product attention.
     `self` is the query tensor, `key` is the key tensor, and `value` is the value tensor.
@@ -3859,6 +3860,13 @@ class Tensor(MathTrait):
     """
     # NOTE: it also works when `key` and `value` have symbolic shape.
     assert all_int(self.shape), f"does not support symbolic shape {self.shape}"
+    if self.shape[-3] != key.shape[-3]:
+      if not enable_gqa:
+        raise RuntimeError(f"The size of tensor a ({self.shape[-3]}) must match the size of tensor b ({key.shape[-3]}) at non-singleton dimension 1")
+      if self.shape[-3] % key.shape[-3] != 0:
+        raise RuntimeError(f"query heads {self.shape[-3]} must be divisible by key heads {key.shape[-3]} for GQA")
+      if (repeat := self.shape[-3] // key.shape[-3]) != 1:
+        key, value = key.repeat_interleave(repeat, dim=-3), value.repeat_interleave(repeat, dim=-3)
     qk = self.matmul(key.transpose(-2,-1), dtype=least_upper_dtype(self.dtype, key.dtype, dtypes.float32)) / math.sqrt(self.shape[-1])
     # handle attention mask
     if is_causal:

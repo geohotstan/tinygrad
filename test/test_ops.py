@@ -2900,6 +2900,111 @@ class TestOps(unittest.TestCase):
       lambda x,y,z,m: Tensor.scaled_dot_product_attention(x,y,z,is_causal=True,attn_mask=m),
       expected=RuntimeError)
 
+  def test_scaled_dot_product_attention_gqa(self):
+    # Query has twice as many heads as key/value. enable_gqa should duplicate kv heads.
+    helper_test_op([(16,16,16,64), (16,8,16,64), (16,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    self.helper_test_exception([(32,16,16,64), (32,8,16,64), (32,8,16,64)],
+      lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z),
+      lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z),
+      expected=RuntimeError)
+
+  def test_scaled_dot_product_attention_gqa_edge_cases(self):
+    # Test case 1: No duplication needed (1:1 ratio)
+    helper_test_op([(16,8,16,64), (16,8,16,64), (16,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test case 2: 4:1 ratio
+    helper_test_op([(16,32,16,64), (16,8,16,64), (16,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test case 3: 8:1 ratio
+    helper_test_op([(16,16,16,64), (16,2,16,64), (16,2,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test case 4: Single head key/value (Multi-Query Attention)
+    helper_test_op([(16,8,16,64), (16,1,16,64), (16,1,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test case 5: Non-divisible heads should raise error
+    self.helper_test_exception([(16,7,16,64), (16,3,16,64), (16,3,16,64)],
+      lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+      lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+      expected=RuntimeError)
+
+    # Test case 6: Query has fewer heads than key should raise error
+    self.helper_test_exception([(16,4,16,64), (16,8,16,64), (16,8,16,64)],
+      lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+      lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+      expected=RuntimeError)
+
+  def test_scaled_dot_product_attention_gqa_with_causal(self):
+    # Test GQA with causal attention
+    helper_test_op([(16,16,16,64), (16,8,16,64), (16,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True, is_causal=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True, is_causal=True))
+
+  def test_scaled_dot_product_attention_gqa_different_seq_lengths(self):
+    # Test GQA with different sequence lengths
+    helper_test_op([(16,8,32,64), (16,4,32,64), (16,4,32,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test different key/value sequence length
+    helper_test_op([(16,8,16,64), (16,4,24,64), (16,4,24,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+  def test_scaled_dot_product_attention_gqa_different_batch_sizes(self):
+    # Test GQA with different batch sizes
+    helper_test_op([(32,16,16,64), (32,8,16,64), (32,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+    # Test single batch
+    helper_test_op([(1,16,16,64), (1,8,16,64), (1,8,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+  def test_scaled_dot_product_attention_gqa_large_heads(self):
+    # Test GQA with large number of heads
+    helper_test_op([(16,64,16,64), (16,16,16,64), (16,16,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+  def test_scaled_dot_product_attention_gqa_3to1_ratio(self):
+    # Test 3:1 ratio (common in some models)
+    helper_test_op([(16,12,16,64), (16,4,16,64), (16,4,16,64)],
+                   lambda x, y, z: torch.nn.functional.scaled_dot_product_attention(x, y, z, enable_gqa=True),
+                   lambda x, y, z: Tensor.scaled_dot_product_attention(x, y, z, enable_gqa=True))
+
+  def test_scaled_dot_product_attention_gqa_attn_mask_bool_broadcast(self):
+    # Boolean attention mask with broadcast over heads (B,1,L,S)
+    helper_test_op([(8,12,16,64), (8,4,16,64), (8,4,16,64), (8,1,16,16)],
+                   lambda q, k, v, m: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=m.bool(), enable_gqa=True),
+                   lambda q, k, v, m: Tensor.scaled_dot_product_attention(q, k, v, attn_mask=m.bool(), enable_gqa=True),
+                   forward_only=True)
+
+  def test_scaled_dot_product_attention_gqa_attn_mask_float(self):
+    # Float attention mask (additive) with broadcast over heads
+    helper_test_op([(4,12,16,64), (4,4,16,64), (4,4,16,64), (4,1,16,16)],
+                   lambda q, k, v, m: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=m, enable_gqa=True),
+                   lambda q, k, v, m: Tensor.scaled_dot_product_attention(q, k, v, attn_mask=m, enable_gqa=True),
+                   forward_only=True)
+
+  def test_scaled_dot_product_attention_gqa_causal_with_mask_error(self):
+    # Providing attn_mask together with is_causal=True should raise an error in both frameworks
+    self.helper_test_exception([(2,4,8,16), (2,2,8,16), (2,2,8,16), (2,1,8,8)],
+      lambda q, k, v, m: torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=m, enable_gqa=True, is_causal=True),
+      lambda q, k, v, m: Tensor.scaled_dot_product_attention(q, k, v, attn_mask=m, enable_gqa=True, is_causal=True),
+      expected=RuntimeError)
+
   def test_binary_crossentropy(self):
     helper_test_op([(32,10), (32,10)], lambda x,y: torch.nn.functional.binary_cross_entropy(x.sigmoid(),y.clip(0,1)),
                                        lambda x,y: x.sigmoid().binary_crossentropy(y.clip(0,1)))
