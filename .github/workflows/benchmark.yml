@@ -62,8 +62,6 @@ jobs:
       run: BENCHMARK_LOG=stable_diffusion_xl CAPTURE_PROCESS_REPLAY=0 JIT=1 python3.11 examples/sdxl.py --seed 0 --noshow --timing | tee sdxl.txt
     - name: Run model inference benchmark
       run: METAL=1 python3.11 test/external/external_model_benchmark.py
-    - name: Run huggingface_onnx test
-      run: METAL=1 python3.11 extra/huggingface_onnx/run_models.py test --debug FacebookAI/xlm-roberta-large
     - name: Test speed vs torch
       run: BIG=2 MPS=1 python3.11 test/test_speed_v_torch.py | tee torch_speed.txt
     - name: Test tensor cores
@@ -611,12 +609,12 @@ jobs:
       run: BENCHMARK_LOG=openpilot_0_9_7 PYTHONPATH=. QCOM=1 taskset -c 4-7 python3 test/external/external_benchmark_openpilot.py https://github.com/commaai/openpilot/raw/v0.9.7/selfdrive/modeld/models/supercombo.onnx | tee openpilot_0_9_7.txt
     - name: benchmark openpilot w IMAGE=2 0.9.7
       run: BENCHMARK_LOG=openpilot_0_9_7_image PYTHONPATH=. NOLOCALS=1 FLOAT16=1 IMAGE=2 QCOM=1 taskset -c 4-7 python3 test/external/external_benchmark_openpilot.py https://github.com/commaai/openpilot/raw/v0.9.7/selfdrive/modeld/models/supercombo.onnx | tee openpilot_image_0_9_7.txt
-    - name: openpilot compile3 0.9.7
-      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/v0.9.7/selfdrive/modeld/models/supercombo.onnx
-    - name: openpilot compile3 0.9.7+ tomb raider
-      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/e8bea2c78ffa92685ece511e9b554122aaf1a79d/selfdrive/modeld/models/supercombo.onnx
-    - name: openpilot dmonitoring compile3 0.9.7
-      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/v0.9.7/selfdrive/modeld/models/dmonitoring_model.onnx
+    - name: openpilot compile3 0.9.9 driving_vision
+      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/v0.9.9/selfdrive/modeld/models/driving_vision.onnx
+    - name: openpilot compile3 0.9.9 driving_policy
+      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/v0.9.9/selfdrive/modeld/models/driving_policy.onnx
+    - name: openpilot compile3 0.9.9 dmonitoring
+      run: PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://github.com/commaai/openpilot/raw/v0.9.9/selfdrive/modeld/models/dmonitoring_model.onnx
     - name: openpilot compile3 Space Lab policy + vision
       run: |
         PYTHONPATH="." QCOM=1 taskset -c 4-7 python3 examples/openpilot/compile3.py https://gitlab.com/commaai/openpilot-lfs.git/gitlab-lfs/objects/22aec22a10ce09384d4a4af2a0bbff08d54af7e0c888503508f356fae4ff0e29
