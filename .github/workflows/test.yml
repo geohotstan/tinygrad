@@ -989,6 +989,30 @@ jobs:
       - name: Run macOS-specific unit test
         if: matrix.backend == 'cpu'
         run: python3 -m pytest test/unit/test_disk_tensor.py::TestDiskTensor::test_copy_to_cpu_not_truncated
+  
+  osxhuggingface:
+    name: Models Huggingface ONNX
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      METAL: '1'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Setup Environment
+        uses: ./.github/actions/setup-tinygrad
+        with:
+          key: huggingface
+          pydeps: "onnx==1.16.0 onnxruntime pillow huggingface_hub"
+      - name: Check Device.DEFAULT and print some source
+        run: |
+          python -c "from tinygrad import Device; assert Device.DEFAULT == 'METAL', Device.DEFAULT"
+          DEBUG=4 python3 test/test_tiny.py TestTiny.test_plus
+      - name: Download ONNX Models
+        run: python3 -u extra/huggingface_onnx/download_models.py extra/huggingface_onnx/huggingface_repos.yaml
+      - name: Validate HuggingFace Models
+        run: PYTHONPATH=. python3 -u extra/huggingface_onnx/run_models.py extra/huggingface_onnx/huggingface_repos.yaml --validate
+
 
 # ****** Windows Tests ******
 
