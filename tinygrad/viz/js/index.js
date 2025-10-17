@@ -259,6 +259,7 @@ async function renderProfiler() {
           x += 1; y += nbytes; valueMap.set(ts, y);
         } else {
           const free = buf_shapes.get(key);
+          free.users = Array.from({ length: u32() }, () => ({name:strings[u32()], num:u8(), mode:u8()}));
           timestamps.push(ts); valueMap.set(ts, y);
           x += 1; y -= free.nbytes;
           free.x.push(x);
@@ -271,19 +272,24 @@ async function renderProfiler() {
           }
         }
       }
-      for (const [_, v] of temp) {
-        v.x.push(x);
-        v.y.push(v.y.at(-1));
-      }
       timestamps.push(dur);
       const height = heightScale(peak);
       const yscale = d3.scaleLinear().domain([0, peak]).range([height, 0]);
-      for (const [num, {dtype, sz, nbytes, y, x:steps}] of buf_shapes) {
+      for (const [num, {dtype, sz, nbytes, y, x:steps, users}] of buf_shapes) {
         const x = steps.map(s => timestamps[s]);
         const dur = x.at(-1)-x[0];
         const html = document.createElement("div");
         const rows = [["DType", dtype], ["Len", formatUnit(sz)], ["Size", formatUnit(nbytes, "B")], ["Lifetime", formatTime(dur)]];
+        if (users != null) rows.push(["Users", users.length]);
         const info = html.appendChild(tabulate(rows).node());
+        for (let u=0; u<users?.length; u++) {
+          const p = html.appendChild(document.createElement("p")); p.style.marginTop = "4px"; p.style.cursor = "pointer";
+          const { name, num, mode } = users[u]; p.appendChild(colored(`[${u}] ${name} ${mode == 2 ? 'read+write' : mode == 1 ? 'write' : 'read'}@data${num}`));
+          p.onclick = () => {
+            const cid = ctxs.findIndex(c => c.name === name);
+            if (cid != null) setCtxWithHistory(cid-1);
+          }
+        }
         const arg = {tooltipText:info.outerHTML, html, key:`${k}-${num}`};
         shapes.push({ x, y0:y.map(yscale), y1:y.map(y0 => yscale(y0+nbytes)), arg, fillColor:cycleColors(colorScheme.BUFFER, shapes.length) });
       }
@@ -354,7 +360,7 @@ async function renderProfiler() {
           for (let i=x.length-1; i>=0; i--) p.lineTo(x[i], offsetY+e.y1[i]);
           p.closePath();
           ctx.fillStyle = e.fillColor; ctx.fill(p);
-          if (focusedShape && e.arg?.key === focusedShape.key) { paths.push(p); }
+          if (focusedShape?.key && e.arg?.key === focusedShape.key) { paths.push(p); }
           continue;
         }
         // contiguous rect
@@ -515,14 +521,6 @@ function appendTd(tr, value, unit=null) {
   tr.appendChild(document.createElement("td")).innerText = unit == "us" ? formatTime(value) : fmt+(unit ?? "");
 }
 
-function appendRow(table, name, value, unit=null, cls="main-row") {
-  const tr = table.appendChild(document.createElement("tr"));
-  tr.className = cls;
-  tr.appendChild(document.createElement("td")).innerText = name;
-  appendTd(tr, value, unit);
-  return tr;
-}
-
 function setActive(e) {
   if (e == null) return;
   e.classList.add("active");
@@ -630,9 +628,9 @@ async function main() {
     ret = cache[ckey];
   }
   // ** Disassembly view
-  if (ckey.startsWith("/disasm")) {
+  if (ckey.startsWith("/render")) {
     if (!(ckey in cache)) cache[ckey] = ret = await (await fetch(ckey)).json();
-    displayGraph("disasm");
+    displayGraph("render");
     const root = document.createElement("div");
     root.className = "raw-text";
     const metadata = document.querySelector(".metadata");
@@ -666,8 +664,8 @@ async function main() {
         const div = d3.create("div").style("background", cycleColors(colorScheme.CATEGORICAL, s.idx)).style("width", "24px").style("height", "100%");
         return [s.label.trim(), div.node()];
       })).node());
-    } else root.appendChild(codeBlock(ret.src, "x86asm"));
-    return document.querySelector(".disasm").replaceChildren(root);
+    } else root.appendChild(codeBlock(ret.src, ret.lang));
+    return document.querySelector(".render").replaceChildren(root);
   }
   // ** UOp view (default)
   // if we don't have a complete cache yet we start streaming rewrites in this step
@@ -691,8 +689,8 @@ async function main() {
   renderDag(ret[currentRewrite].graph, ret[currentRewrite].changed_nodes ?? [], currentRewrite === 0);
   // ** right sidebar code blocks
   const metadata = document.querySelector(".metadata");
-  const [code, lang] = ctx.fmt != null ? [ctx.fmt, "cpp"] : [ret[currentRewrite].uop, "python"];
-  metadata.replaceChildren(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }), codeBlock(code, lang, { wrap:false }));
+  metadata.replaceChildren(codeBlock(step.code_line, "python", { loc:step.loc, wrap:true }),
+                           codeBlock(ret[currentRewrite].uop, "python", { wrap:false }));
   // ** rewrite steps
   if (step.match_count >= 1) {
     const rewriteList = metadata.appendChild(document.createElement("div"));
