@@ -113,7 +113,7 @@ pm_apply_rangeify = PatternMatcher([
 @functools.cache
 def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   match op:
-    case Ops.SHRINK:  rngs = tuple(a if ss == 0 else a+ss for a,(ss,_) in zip(rngs, arg))
+    case Ops.SHRINK:  rngs = rngs
     case Ops.PERMUTE: rngs = tuple(rngs[p] for p in argsort(arg))
     case Ops.FLIP:    rngs = tuple(((s-1)-a) if f else a for a,s,f in zip(rngs, in_shape, arg))
     case Ops.EXPAND:  rngs = tuple(a if in_sh == out_sh else a.const_like(0) for a,in_sh,out_sh in zip(rngs, in_shape, arg))
@@ -121,8 +121,8 @@ def apply_movement_op(op:Ops, in_shape:tuple[sint,...], arg:tuple, rngs:tuple[UO
       # TODO: why is multiple graph_rewrites faster than one here?
       # TODO: the .where(r-s, i) is not inside the graph_rewrite so that `convert_pad_to_where_to_keep_behavior_local`
       #       wraps the pad with only the newly added valid
-      rngs = tuple(r if (s == 0 and e == 0) else graph_rewrite(((r >= s) & (r < (sh+s))),
-        symbolic+pm_simplify_valid, name="pad").where(r-s, UOp.invalid()) for r,sh,(s,e) in zip(rngs, in_shape, arg))
+      rngs = tuple(r if ish == osh else graph_rewrite((r < ish), symbolic+pm_simplify_valid, name="pad").where(r, UOp.invalid())
+        for r,ish,osh in zip(rngs, in_shape, arg))
     case Ops.RESHAPE:
       acc = 1
       axes_in:list[UOp] = []

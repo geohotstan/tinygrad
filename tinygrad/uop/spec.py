@@ -82,8 +82,7 @@ assign_spec = PatternMatcher([
 # *** this is the spec of a Tensor in UOp ***
 
 tensor_uop_spec = buffer_spec+assign_spec+PatternMatcher([
-  (UPat((Ops.RESHAPE, Ops.EXPAND), name="mv", src=(UPat.var("x"), UPat(dtype=dtypes.index))), lambda mv,x: True),
-  (UPat((Ops.PAD, Ops.SHRINK), name="mv", src=(UPat.var("x"), UPat(dtype=dtypes.index), UPat(dtype=dtypes.index))), lambda mv,x: True),
+  (UPat((Ops.RESHAPE, Ops.EXPAND, Ops.SHRINK, Ops.PAD), name="mv", src=(UPat.var("x"), UPat(dtype=dtypes.index))), lambda mv,x: True),
   (UPat((Ops.PERMUTE, Ops.FLIP), name="mv", src=(UPat.var("x"),)), lambda mv,x: isinstance(mv.arg, tuple)),
 
   # inputs to movement ops

@@ -1774,6 +1774,11 @@ class TestOps(unittest.TestCase):
     helper_test_op([(4,4)], lambda x: x[:, 1:2][0:1])
     helper_test_op([(4,4)], lambda x: x[:, 1:2][:, 0:1])
 
+  def test_shrink(self):
+    helper_test_op([(4, 4)], lambda x: x[0:3, 0:3], lambda x: x.shrink(((0, 3), (0, 3))))
+    helper_test_op([(4, 4)], lambda x: x[:, 0:3], lambda x: x.shrink(((0, 4), (0, 3))))
+    helper_test_op([(4, 4)], lambda x: x[1:3, 1:3], lambda x: x.shrink(((1, 3), (1, 3))))
+
   def test_pad(self):
     helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (1,2,3,4)), lambda x: x.pad(padding=(1,2,3,4)))
     helper_test_op([(3,3,3,3)], lambda x: torch.nn.functional.pad(x, (-1,2,-3,4)), lambda x: x.pad(padding=(-1,2,-3,4)))

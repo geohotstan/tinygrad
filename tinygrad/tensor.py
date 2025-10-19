@@ -1106,6 +1106,12 @@ class Tensor(MathTrait):
     if len(axis_arg) != len(dedup(axis_arg)): raise RuntimeError(f"dim can appear at most once, getting {axis_arg}")
     return self._apply_uop(UOp.flip, arg=tuple([i in axis_arg for i in range(len(self.shape))]))
 
+  def _apply_both_sides(self, fxn, arg:tuple[sint, ...]):
+    left_arg, right_arg = zip(*arg)
+    x = self._apply_uop(fxn, arg=tuple(right_arg))
+    if not (flip_arg := tuple(d for d,(la,s) in enumerate(zip(left_arg, x.shape)) if la != s)): return x
+    return x.flip(flip_arg)._apply_uop(fxn, arg=tuple(left_arg)).flip(flip_arg)
+
   def shrink(self, arg:tuple[tuple[sint, sint]|None, ...]) -> Tensor:
     """
     Returns a tensor that shrinks the each axis based on input arg.
@@ -1124,8 +1130,9 @@ class Tensor(MathTrait):
     ```
     """
     if self.ndim != len(arg): raise ValueError(f"{self.ndim=} != {len(arg)=}")
-    if (shrink_arg:=[x if x is not None else (0,s) for x,s in zip(arg, self.shape)]) == [(0,s) for s in self.shape]: return self
-    return self._apply_uop(UOp.shrink, arg=tuple(shrink_arg))
+    shape_arg = [(a[1]-a[0], a[1]) if a is not None else (s,s) for a,s in zip(arg, self.shape)]
+    return self._apply_both_sides(UOp.shrink, shape_arg)
+
 
   def pad(self, padding:Sequence[sint]|Sequence[tuple[sint, sint]|None], mode:str="constant", value:float=0.0) -> Tensor:
     """
@@ -1169,10 +1176,15 @@ class Tensor(MathTrait):
     if len(pX) != self.ndim: raise ValueError(f"padding length is improper, {padding=} {self.ndim=}")
     X, pads = self, tuple((smax(pB,0), smax(pA,0)) for pB,pA in pX)
     if mode == "constant":
-      def _constant(x:Tensor,px,v) -> Tensor:
-        return x._apply_uop(UOp.pad, arg=px) if v == 0 else (x._apply_uop(UOp.pad, arg=px)+Tensor.ones_like(x)._apply_uop(UOp.pad, arg=px).where(0,v))
-      return _constant(X, pX, value) if all(resolve(p >= 0) for p in flatten(pX)) else \
-             _constant(X.shrink(tuple((-smin(pB,0),smin(pA+s,s)) for (pB,pA),s in zip(pX, X.shape))), pads, value)
+      def _constant(x:Tensor, px, v) -> Tensor:
+        arg = [(xs+ps[0]+ps[1], xs+ps[1]) for xs, ps in zip(x.shape, px)]
+        if v == 0: return x._apply_both_sides(UOp.pad, arg)
+        return x._apply_both_sides(UOp.pad, arg) + Tensor.ones_like(x)._apply_both_sides(UOp.pad, arg).where(0,v)
+      # all positive pads
+      if all(resolve(p >= 0) for p in flatten(pX)):
+        return _constant(X, pX, value)
+      # negative pads
+      return _constant(X.shrink(tuple((-smin(pB,0),smin(pA+s,s)) for (pB,pA),s in zip(pX, X.shape))), pads, value)
     assert all_int(self.shape), f"does not support symbolic shape {self.shape}"
     if mode == "circular":
       if any(pB>sh or pA>sh for (pB,pA),sh in zip(pX, X.shape)): raise ValueError('Padding value causes wrapping around more than once.')

@@ -201,6 +201,7 @@ def passthrough_multi(root:UOp, multi:UOp):
   return UOp(root.op, root.dtype, (multi.src[0],), root.arg).multi(multi.axis)
 
 # NOTE: this is the same pattern as Ops.UNROLL
+# TODO: pad shrink multi
 multi_pm = PatternMatcher([
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.MULTI])), alu_multi),
   (UPat(Ops.REDUCE_AXIS, src=(UPat(Ops.MULTI, name="multi"), ), name="root"), reduce_multi),

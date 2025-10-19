@@ -230,14 +230,12 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
           if sorted(self.marg) != list(range(len(ps))): raise ValueError(f"invalid permutation {self.marg} of len {len(ps)}")
           return tuple(ps[i] for i in self.marg)
         case Ops.PAD:
-          # TODO: why do i need resolve here?
-          if len(ps) != len(self.marg) or not all(resolve(b>=0) and resolve(e>=0) for b,e in self.marg): raise ValueError(f"invalid pad {self.marg}")
-          return tuple(ssimplify(s+b+e) for s,(b,e) in zip(ps, self.marg))
+          if len(ps) != len(self.marg) or not all(s >= 0 for s in self.marg): raise ValueError(f"invalid pad {self.marg}")
+          return self.marg
         case Ops.SHRINK:
-          # TODO: why do i need resolve here?
-          if len(ps) != len(self.marg) or not all(resolve(0<=b) and resolve(b<=e) and resolve(e<=s) for s,(b,e) in zip(ps, self.marg)):
+          if len(ps) != len(self.marg) or not all(0<=ns and ns<=s for s,ns in zip(ps, self.marg)):
             raise ValueError(f"invalid shrink {self.marg} for {ps}")
-          return tuple(ssimplify(e-s) for s,e in self.marg)
+          return self.marg
         case Ops.FLIP:
           if len(ps) != len(self.marg) or not all(isinstance(x, bool) for x in self.marg): raise ValueError(f"bad flip on {ps}, {self.marg}")
           return ps
@@ -476,15 +474,13 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   @functools.cached_property
   def marg(self):
     match self.op:
-      case Ops.RESHAPE | Ops.EXPAND: return tuple(self.src[1].sgep(i) for i in range(self.src[1].dtype.count))
-      case Ops.PAD | Ops.SHRINK: return tuple((self.src[1].sgep(i), self.src[2].sgep(i)) for i in range(self.src[1].dtype.count))
+      case Ops.RESHAPE | Ops.EXPAND | Ops.SHRINK | Ops.PAD: return tuple(self.src[1].sgep(i) for i in range(self.src[1].dtype.count))
       case Ops.PERMUTE | Ops.FLIP: return self.arg
       case _: raise RuntimeError(f"{self.op} is not a MovementOp")
 
   def _mop(self, op:Ops, arg, same_shape_noop:bool=False) -> UOp:
     match op:
-      case Ops.RESHAPE | Ops.EXPAND: src_args = [arg]
-      case Ops.PAD | Ops.SHRINK: src_args = list(zip(*arg))
+      case Ops.RESHAPE | Ops.EXPAND | Ops.SHRINK | Ops.PAD: src_args = [arg]
       case Ops.PERMUTE | Ops.FLIP: src_args = []
       case _: raise RuntimeError(f"{op} is not a MovementOp")
     usrcs = []
@@ -501,8 +497,8 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def forced_reshape(self, arg:tuple[sint, ...]): return self._mop(Ops.RESHAPE, arg, same_shape_noop=False)
   def reshape(self, arg:tuple[sint, ...]): return self._mop(Ops.RESHAPE, arg, same_shape_noop=True)
   def expand(self, arg:tuple[sint, ...]): return self._mop(Ops.EXPAND, arg, same_shape_noop=True)
-  def shrink(self, arg:tuple[tuple[sint, sint], ...]): return self._mop(Ops.SHRINK, arg, same_shape_noop=True)
-  def pad(self, arg:tuple[tuple[sint, sint], ...]): return self._mop(Ops.PAD, arg, same_shape_noop=True)
+  def shrink(self, arg:tuple[sint, ...]): return self._mop(Ops.SHRINK, arg, same_shape_noop=True)
+  def pad(self, arg:tuple[sint, ...]): return self._mop(Ops.PAD, arg, same_shape_noop=True)
 
   # in these two, we have custom logic to check if they are a no-op
   def permute(self, arg:tuple[int, ...]): return self._mop(Ops.PERMUTE, arg, same_shape_noop=False) if arg != tuple(range(len(self.shape))) else self
