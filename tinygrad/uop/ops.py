@@ -230,12 +230,12 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
           if sorted(self.marg) != list(range(len(ps))): raise ValueError(f"invalid permutation {self.marg} of len {len(ps)}")
           return tuple(ps[i] for i in self.marg)
         case Ops.PAD:
-          if len(ps) != len(self.marg) or not all(s >= 0 for s in self.marg): raise ValueError(f"invalid pad {self.marg}")
-          return self.marg
+          if len(ps) != len(self.marg) or not all(resolve(s >= 0) for s in self.marg): raise ValueError(f"invalid pad {self.marg}")
+          return tuple(map(ssimplify, self.marg))
         case Ops.SHRINK:
-          if len(ps) != len(self.marg) or not all(0<=ns and ns<=s for s,ns in zip(ps, self.marg)):
+          if len(ps) != len(self.marg) or not all(resolve(0<=ns) and resolve(ns<=s) for s,ns in zip(ps, self.marg)):
             raise ValueError(f"invalid shrink {self.marg} for {ps}")
-          return self.marg
+          return tuple(map(ssimplify, self.marg))
         case Ops.FLIP:
           if len(ps) != len(self.marg) or not all(isinstance(x, bool) for x in self.marg): raise ValueError(f"bad flip on {ps}, {self.marg}")
           return ps
@@ -435,6 +435,9 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
   def _unshard(self, axis:int) -> UOp:
     bsz, dcount = self.shape[axis], len(self.device)
     dnum = UOp.variable("_device_num", 0, dcount-1)
+    # TODO Patch this
+    # arg = tuple((0,0) if a != axis else (bsz*dnum, bsz*(dcount-1) - bsz*dnum) for a in range(len(self.shape)))
+    # arg = tuple((s,s) if i != axis else (sz,dnum*sz+sz) for i,s in enumerate(self.shape))
     return self.pad(tuple((0,0) if a != axis else (bsz*dnum, bsz*(dcount-1) - bsz*dnum) for a in range(len(self.shape))))
 
   def _shard(self, axis:int) -> UOp:
@@ -442,7 +445,16 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
     dnum = UOp.variable("_device_num", 0, dcount-1)
     if self.shape[axis] % dcount != 0: raise RuntimeError(f"multi axis uneven: {self.shape[axis]=} {axis=} {dcount=}")
     sz = self.shape[axis] // dcount
-    return self.shrink(tuple((0,s) if i != axis else (dnum*sz,dnum*sz+sz) for i,s in enumerate(self.shape)))
+    # def _apply_both_sides(self, fxn, arg:tuple[sint, ...]):
+      # left_arg, right_arg = zip(*arg)
+      # x = self._apply_uop(fxn, arg=tuple(right_arg))
+      # if not (flip_arg := tuple(d for d,(la,s) in enumerate(zip(left_arg, x.shape)) if la != s)): return x
+      # return x.flip(flip_arg)._apply_uop(fxn, arg=tuple(left_arg)).flip(flip_arg)
+    arg = tuple((s,s) if i != axis else (sz,dnum*sz+sz) for i,s in enumerate(self.shape))
+    left_arg, right_arg = zip(*arg)
+    x = self.shrink(tuple(right_arg))
+    if not (flip_arg := tuple(d for d,(la,s) in enumerate(zip(left_arg, x.shape)) if la != s)): return x
+    return x.flip(flip_arg).shrink(tuple(left_arg)).flip(flip_arg)
   def shard(self, devices:tuple[str, ...], axis:int) -> UOp: return self.copy_to_device(devices)._shard(axis).multi(axis)
 
   # *** from LazyBuffer ***
@@ -490,6 +502,7 @@ class UOp(MathTrait, metaclass=UOpMetaClass):
       else: usrcs.append(UOp(Ops.VECTORIZE, dtypes.index.vec(len(arg)), tuple(UOp.const(dtypes.index, x) if isinstance(x, int) else x for x in arg)))
     ret = UOp(op, self.dtype, (self,)+tuple(usrcs), arg if len(usrcs) == 0 else None)
     # for all movement ops, we check shape property
+    # print(op, arg)
     if ret.shape == self.shape and same_shape_noop: return self
     return ret
 

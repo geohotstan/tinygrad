@@ -294,7 +294,7 @@ def bufferize_to_store(x:UOp):
     # TODO: is this right? what if it's offset
     if any(r.op is Ops.RANGE and r.src[0].op is not Ops.CONST for r in rngs):
       sym_shape = tuple([ssimplify(r.src[0]) if r.op is not Ops.CONST else 1 for r in rngs])
-      ret = ret.shrink(tuple([(0,x) for x in sym_shape]))
+      ret = ret.shrink(sym_shape)
     return ret.replace(tag=x.tag)
 
   # handle locals

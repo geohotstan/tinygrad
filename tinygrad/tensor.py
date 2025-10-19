@@ -1133,7 +1133,6 @@ class Tensor(MathTrait):
     shape_arg = [(a[1]-a[0], a[1]) if a is not None else (s,s) for a,s in zip(arg, self.shape)]
     return self._apply_both_sides(UOp.shrink, shape_arg)
 
-
   def pad(self, padding:Sequence[sint]|Sequence[tuple[sint, sint]|None], mode:str="constant", value:float=0.0) -> Tensor:
     """
     Returns a tensor with padding applied based on the input `padding`.

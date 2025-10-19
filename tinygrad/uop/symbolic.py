@@ -51,7 +51,7 @@ def what(x, y):
 
 symbolic_simple = propagate_invalid + PatternMatcher([
   # hack
-  ((UPat.var("x") * UPat.const(dtypes.index, -1)) < UPat.var("y"), what),
+  # ((UPat.var("x") * UPat.const(dtypes.index, -1)) < UPat.var("y"), what),
   # ** self folding **
   (UPat.var("x") + 0, lambda x: x),    # x+0 -> x
   (UPat.var("x") * 1, lambda x: x),    # x*1 -> x
