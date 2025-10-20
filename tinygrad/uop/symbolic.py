@@ -43,15 +43,7 @@ propagate_invalid = PatternMatcher([
   (UPat.var("gate").where(UPat.var("y"), invalid_gate).named("where"), lambda gate,cond,x,y,i: gate.logical_not().where(cond.where(x,i), y))
 ])
 
-def what(x, y):
-  if y.arg is not None and y.arg < 0:
-    print((x < y.replace(arg=abs(y.arg)+1)) != True)
-    return (x < y.replace(arg=abs(y.arg)+1)) != True
-  return None
-
 symbolic_simple = propagate_invalid + PatternMatcher([
-  # hack
-  # ((UPat.var("x") * UPat.const(dtypes.index, -1)) < UPat.var("y"), what),
   # ** self folding **
   (UPat.var("x") + 0, lambda x: x),    # x+0 -> x
   (UPat.var("x") * 1, lambda x: x),    # x*1 -> x
