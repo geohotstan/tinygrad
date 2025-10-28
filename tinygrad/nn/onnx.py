@@ -138,7 +138,9 @@ class OnnxPBParser:
     self.reader = PBBufferedReader(self.tensor)
 
     # checks for proper ONNX file
-    if self.reader.len() == 0: raise ValueError("Empty ONNX file.")
+    if self.reader.len == 0: raise ValueError("Empty ONNX file.")
+    # ir_version must be present
+    # see: https://github.com/onnx/onnx/blob/rel-1.18.0/onnx/onnx.proto3#L439-L441
     if (first_tag := self.reader.decode_varint() >> 3) != 1:
       raise ValueError(f"Invalid ONNX file. Expected first field to be ir_version (tag 1), but got tag {first_tag}.")
     self.reader.seek(0)
