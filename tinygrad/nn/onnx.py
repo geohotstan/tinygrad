@@ -137,6 +137,12 @@ class OnnxPBParser:
     else: self.tensor = inp
     self.reader = PBBufferedReader(self.tensor)
 
+    # checks for proper ONNX file
+    if self.reader.len() == 0: raise ValueError("Empty ONNX file.")
+    if (first_tag := self.reader.decode_varint() >> 3) != 1:
+      raise ValueError(f"Invalid ONNX file. Expected first field to be ir_version (tag 1), but got tag {first_tag}.")
+    self.reader.seek(0)
+
   def parse(self) -> dict:
     """Parses the ONNX model into a nested dictionary. """
     return self._parse_ModelProto()
