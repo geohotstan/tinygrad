@@ -85,6 +85,15 @@ class TestOnnxRunner(unittest.TestCase):
       output = runner({'inp': Tensor([1])})['output']
       np.testing.assert_equal(output.numpy(), weights + 1)
 
+  def test_faulty_model(self):
+    with tempfile.TemporaryDirectory() as tmpdir:
+      tmp_path = pathlib.Path(tmpdir)
+      model_path = tmp_path / "model.onnx"
+      with open(model_path, "w") as f:
+        f.write("this is not an onnx model")
+      with self.assertRaises(ValueError):
+        OnnxRunner(model_path)
+
 all_dtypes = list(OnnxDataType)
 device_supported_dtypes = {odt for odt in OnnxDataType if is_dtype_supported(odt.to_dtype())}
 
