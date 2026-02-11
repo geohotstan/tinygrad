@@ -64,7 +64,7 @@ class TestConv(unittest.TestCase):
 
   @unittest.skip("this test is flaky")
   def test_two_overlapping_binops_no_rerun_wino(self):
-    with Context(WINO=1):
+    with Context(OLD_WINO=1):
       x = Tensor.randn(1,4,16,16)
       w = Tensor.randn(6,4,3,3)
       out = x.conv2d(w, padding=(1,1))

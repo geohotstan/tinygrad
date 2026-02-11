@@ -10,7 +10,7 @@ from extra.lr_scheduler import OneCycleLR
 from tinygrad import nn, dtypes, Tensor, Device, GlobalCounters, TinyJit, Variable
 from tinygrad.nn.state import get_state_dict
 from tinygrad.nn import optim
-from tinygrad.helpers import Context, BEAM, WINO, getenv, colored, prod
+from tinygrad.helpers import Context, BEAM, OLD_WINO, getenv, colored, prod
 from extra.bench_log import BenchEvent, WallTimeEvent
 
 cifar_mean = [0.4913997551666284, 0.48215855929893703, 0.4465309133731618]
@@ -402,7 +402,7 @@ def train_cifar():
           X.shard_(GPUS, axis=0)
           Y.shard_(GPUS, axis=0)
 
-        with Context(BEAM=getenv("LATEBEAM", BEAM.value), WINO=getenv("LATEWINO", WINO.value)):
+        with Context(BEAM=getenv("LATEBEAM", BEAM.value), OLD_WINO=getenv("LATEWINO", OLD_WINO.value)):
           loss = train_step_jitted(model, optim.OptimizerGroup(opt_bias, opt_non_bias), [lr_sched_bias, lr_sched_non_bias], X, Y)
           et = time.monotonic()
           loss_cpu = loss.numpy()

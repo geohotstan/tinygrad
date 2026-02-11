@@ -160,7 +160,7 @@ class TestNN(unittest.TestCase):
     # test
     x = Tensor.uniform(BS, C1, H, W, requires_grad=True)
 
-    with Context(WINO=1):
+    with Context(OLD_WINO=1):
       z = layer(x)
 
     m = z.mean()

@@ -1,14 +1,14 @@
 import unittest, sys
 from tinygrad import Tensor, GlobalCounters, dtypes, Context
-from tinygrad.helpers import CI, Profiling, WINO
+from tinygrad.helpers import CI, Profiling, OLD_WINO
 
 @unittest.skipIf(sys.platform.startswith("win"), "flaky on Windows")
 class TestWinograd(unittest.TestCase):
   def setUp(self):
-    self.old = WINO.value
-    WINO.value = 1
+    self.old = OLD_WINO.value
+    OLD_WINO.value = 1
   def tearDown(self):
-    WINO.value = self.old
+    OLD_WINO.value = self.old
 
   def test_profile(self):
     x,w = Tensor.rand(1,4,9,9).realize(), Tensor.rand(4,4,3,3).realize()
@@ -31,11 +31,11 @@ class TestWinograd(unittest.TestCase):
     IC, OC, X, Y = 4,4,9,9
     x,w = Tensor.rand(1,IC,Y,X).realize(), Tensor.rand(OC,IC,3,3).realize()
     GlobalCounters.reset()
-    with Context(WINO=1):
+    with Context(OLD_WINO=1):
       Tensor.conv2d(x,w).realize()
     ops_wino, mem_wino = GlobalCounters.global_ops, GlobalCounters.global_mem
     GlobalCounters.reset()
-    with Context(WINO=0):
+    with Context(OLD_WINO=0):
       Tensor.conv2d(x,w).realize()
     ops_normal, mem_normal = GlobalCounters.global_ops, GlobalCounters.global_mem
 
