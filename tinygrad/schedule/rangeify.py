@@ -5,12 +5,11 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, _
 from tinygrad.uop.ops import graph_rewrite, identity_element, sint, AxisType, BottomUpGate, _remove_all_tags, range_str
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.helpers import argsort, prod, all_same, getenv, flatten, dedup, all_int, DEBUG, SPLIT_REDUCEOP, DEBUG_RANGEIFY, VIZ
-from tinygrad.helpers import PCONTIG, partition, get_single_element
+from tinygrad.helpers import PCONTIG, partition, get_single_element, WINO
 from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify
 from tinygrad.codegen.opt import Opt
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, ALWAYS_CONTIGUOUS, IndexingContext, apply_movement_op
 
-# creation can recurse a lot
 import sys
 sys.setrecursionlimit(10000)
 
@@ -563,8 +562,111 @@ replace_contiguous = PatternMatcher([
   (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
+# 3.2 Winograd
+winograd_G = [[1/4, 0, 0], [-1/6, -1/6, -1/6], [-1/6, 1/6, -1/6], [1/24, 1/12, 1/6], [1/24, -1/12, 1/6], [0, 0, 1]]
+winograd_Bt = [[4, 0, -5, 0, 1, 0], [0, -4, -4, 1, 1, 0], [0, 4, -4, -1, 1, 0], [0, -2, -1, 2, 1, 0], [0, 2, -1, -2, 1, 0], [0, 4, 0, -5, 0, 1]]
+winograd_At = [[1, 1, 1, 1, 1, 0], [0, 1, -1, 2, -2, 0], [0, 1, 1, 4, 4, 0], [0, 1, -1, 8, -8, 1]]
+
+def _shape_eq(x:sint, y:sint) -> bool:
+  return bool(resolve(x == y))
+
+def _apply_winograd_axis(source:UOp, matrix:list[list[float]], axis:int) -> UOp:
+  out_sz, in_sz = len(matrix), len(matrix[0])
+  if not _shape_eq(source.shape[axis], in_sz): raise RuntimeError(f"axis {axis} mismatch for winograd matrix ({source.shape[axis]} != {in_sz})")
+  out: UOp | None = None
+  for out_i, row in enumerate(matrix):
+    partial: UOp | None = None
+    for in_i, coeff in enumerate(row):
+      if coeff == 0: continue
+      shr = tuple((0,s) if i != axis else (in_i, in_i+1) for i,s in enumerate(source.shape))
+      term = source.shrink(shr)
+      if coeff != 1: term = term * term.const_like(float(coeff))
+      partial = term if partial is None else partial + term
+    if partial is None:
+      partial = source.shrink(tuple((0,s) if i != axis else (0,1) for i,s in enumerate(source.shape))).const_like(0.0)
+    partial = partial.pad(tuple((0,0) if i != axis else (out_i, out_sz-out_i-1) for i in range(source.ndim)))
+    out = partial if out is None else out + partial
+  assert out is not None
+  return out
+
+def apply_winograd_matrix(source:UOp, matrix:list[list[float]], dims:int) -> UOp:
+  for axis in range(dims): source = _apply_winograd_axis(source, matrix, axis)
+  return source
+
+def winoguard(act_like:UOp, w_like:UOp, redu:UOp):
+  if redu.arg[0] is not Ops.ADD or redu.src[0].op is not Ops.MUL: return None
+  if (dims := len(redu.arg[1]) - 1) < 2: return None
+  if redu.arg[1] != tuple(range(redu.ndim-dims-1, redu.ndim)): return None
+
+  if not (act_like.op is Ops.PERMUTE and act_like.src[0].op is Ops.EXPAND and act_like.src[0].src[0].op is Ops.RESHAPE): return None
+  if not (w_like.op is Ops.EXPAND and w_like.src[0].op is Ops.RESHAPE): return None
+  if act_like.arg != (0, 1, 3, *[4+i for i in range(dims)], 2, *[4+dims+i for i in range(dims)]): return None
+
+  act_reshape, w_reshape = act_like.src[0].src[0], w_like.src[0]
+  if len(act_reshape.shape) != 4+2*dims or len(w_reshape.shape) != 4+2*dims: return None
+  if not _shape_eq(act_reshape.shape[3], 1) or not all(_shape_eq(x, 1) for x in w_reshape.shape[3:3+dims]): return None
+
+  bs, groups, cin = act_reshape.shape[:3]
+  oyx, hw = act_reshape.shape[4:4+dims], act_reshape.shape[4+dims:4+2*dims]
+  rcout = w_reshape.shape[2]
+  if not _shape_eq(w_reshape.shape[0], 1) or not _shape_eq(w_reshape.shape[1], groups): return None
+  if not _shape_eq(w_reshape.shape[3+dims], cin): return None
+  if any(not _shape_eq(k, 3) for k in hw): return None
+  if any(not _shape_eq(a, b) for a,b in zip(hw, w_reshape.shape[4+dims:4+2*dims])): return None
+
+  pool = act_reshape.src[0]
+  if len(pool.shape) != 2+2*dims: return None
+  if not _shape_eq(pool.shape[0], bs) or not _shape_eq(pool.shape[1], groups*cin): return None
+  if any(not _shape_eq(a, b) for a,b in zip(pool.shape[2:2+dims], oyx)): return None
+  if any(not _shape_eq(a, b) for a,b in zip(pool.shape[2+dims:2+2*dims], hw)): return None
+  w = w_reshape.reshape(groups*rcout, cin, *hw)
+
+  padded = pool
+  while padded.op in GroupOp.Movement and padded.op is not Ops.PAD: padded = padded.src[0]
+  if len(padded.shape) != 2+dims: return None
+  if not _shape_eq(padded.shape[0], bs) or not _shape_eq(padded.shape[1], groups*cin): return None
+  if any(not _shape_eq(sp, out+2) for sp,out in zip(padded.shape[-dims:], oyx)): return None
+
+  return padded, w, bs, groups, rcout, cin, oyx, dims
+
+# winograd
+def winowrite(lhs:UOp, rhs:UOp, redu:UOp):
+  g = winoguard(lhs, rhs, redu) or winoguard(rhs, lhs, redu)
+  if g is None: return None
+  padded, w, bs, groups, rcout, cin, oyx, dims = g
+  if not all_int(padded.shape[-dims:]): return None
+
+  HWI, HWO = (6,) * dims, (4,) * dims
+  extra = tuple((-(int(s)-2)) % 4 for s in padded.shape[-dims:])
+  padded = padded.pad(tuple((0,0) for _ in range(padded.ndim-dims)) + tuple((0, e) for e in extra))
+
+  d = padded._pool(HWI, HWO)
+  d = d.permute(tuple(range(d.ndim-dims, d.ndim)) + tuple(range(d.ndim-dims)))  # move HWI to the front
+  tyx = d.shape[-dims:]
+  w = w.permute(tuple(range(w.ndim-dims, w.ndim)) + tuple(range(w.ndim-dims)))   # move HW to the front
+
+  gfactors = apply_winograd_matrix(w, winograd_G, dims).reshape(*HWI, 1, groups, rcout, cin, *([1] * dims))
+  dfactors = apply_winograd_matrix(d, winograd_Bt, dims).reshape(*HWI, bs, groups, 1, cin, *tyx)
+  mshape = (*HWI, bs, groups, rcout, cin, *tyx)
+  mhat = (gfactors.expand(mshape) * dfactors.expand(mshape)).r(Ops.ADD, (dims+3,)).reshape(*HWI, bs, groups, rcout, *tyx)
+  ret = apply_winograd_matrix(mhat, winograd_At, dims)
+
+  ret = ret.permute(tuple(range(dims, ret.ndim-dims)) + tuple(i+off for i in range(dims) for off in (ret.ndim-dims, 0)))
+  cout = groups * rcout
+  ret = ret.reshape(bs, cout, *[ty * HWO[i] for i,ty in enumerate(tyx)]).shrink(tuple((0,s) for s in (bs, cout, *oyx)))
+  return ret.reshape(bs, groups, rcout, *oyx, *([1] * (dims+1)))
+
+def rewrite_winograd(lhs:UOp, rhs:UOp, redu:UOp):
+  if (ret := winowrite(lhs, rhs, redu)) is None: return None
+  return ret.rtag(redu.tag)
+
+winograd_rewrite = PatternMatcher([
+  (UPat(Ops.REDUCE_AXIS, src=(UPat(Ops.MUL, src=(UPat.var("lhs"), UPat.var("rhs"))),), name="redu"),
+   rewrite_winograd)])
+
 def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
   if VIZ: graph_rewrite(sink, PatternMatcher([]), name="View Input Graph")
+  if WINO: sink = graph_rewrite(sink, winograd_rewrite, name="winograd")
   uop_list: list[UOp] = []
   tsink = graph_rewrite(sink, add_tags, ctx=(uop_list, set()), bottom_up=True, name="number the uops")
 
