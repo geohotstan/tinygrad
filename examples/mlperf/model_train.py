@@ -3,7 +3,7 @@ from pathlib import Path
 import multiprocessing
 
 from tinygrad import Device, GlobalCounters, Tensor, TinyJit, dtypes
-from tinygrad.helpers import getenv, BEAM, OLD_WINO, round_up, diskcache_clear, Profiling, profile_marker
+from tinygrad.helpers import getenv, BEAM, WINO, round_up, diskcache_clear, Profiling, profile_marker
 from tinygrad.nn.state import get_parameters, get_state_dict, load_state_dict, safe_load, safe_save
 from tinygrad.nn.optim import LAMB, LARS, SGD, OptimizerGroup, Adam, AdamW
 
@@ -93,7 +93,7 @@ def train_resnet():
   config["BEAM"]          = BEAM.value
   config["TRAIN_BEAM"]    = TRAIN_BEAM
   config["EVAL_BEAM"]     = EVAL_BEAM
-  config["WINO"]          = OLD_WINO.value
+  config["WINO"]          = WINO.value
   config["SYNCBN"]        = getenv("SYNCBN")
 
   # ** Optimizer **
@@ -748,7 +748,7 @@ def train_unet3d():
     "evaluate_every": EVALUATE_EVERY,
     "train_beam": TRAIN_BEAM,
     "eval_beam": EVAL_BEAM,
-    "wino": OLD_WINO.value,
+    "wino": WINO.value,
     "gpus": GPUS,
     "default_float": dtypes.default_float.name
   }
