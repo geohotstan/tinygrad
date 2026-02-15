@@ -5,7 +5,7 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp, _
 from tinygrad.uop.ops import graph_rewrite, identity_element, sint, AxisType, BottomUpGate, _remove_all_tags, range_str
 from tinygrad.uop.symbolic import symbolic
 from tinygrad.helpers import argsort, prod, all_same, getenv, flatten, dedup, all_int, DEBUG, SPLIT_REDUCEOP, DEBUG_RANGEIFY, VIZ, MAX_KERNEL_BUFFERS
-from tinygrad.helpers import PCONTIG, partition, get_single_element
+from tinygrad.helpers import PCONTIG, partition, get_single_element, CHECK_OOB
 from tinygrad.codegen.simplify import pm_flatten_range, pm_reduce_simplify, pm_reduce_load_collapse
 from tinygrad.codegen.opt import Opt
 from tinygrad.schedule.indexing import run_rangeify, BufferizeOpts, ALWAYS_CONTIGUOUS, IndexingContext, apply_movement_op
@@ -247,7 +247,7 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
     del buf_gate
     if buffer_in_reduce:
       # preserve simple chained gather fusion without forcing a LOCAL scratch buffer
-      if _is_simple_gather_reduce(src):
+      if _is_simple_gather_reduce(src) and not CHECK_OOB:
         subbed = src.substitute({k:v for k,v in zip(buf.src[1:], idx.src[1:]) if k.op is not Ops.CONST}, extra_pm=pm_gate_substitute)
         return graph_rewrite(subbed, pm_reduce_load_collapse+symbolic, name="gather_reduce_compose")
       if PCONTIG > 2:
@@ -586,7 +586,8 @@ def found_contiguous(ctx:dict[UOp, UOp], contig:UOp, src:UOp):
   ctx[src.base] = contig
 replace_contiguous = PatternMatcher([
   (UPat(Ops.CONTIGUOUS, src=(UPat(GroupOp.Movement, name="src"),), name="contig"), found_contiguous),
-  (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
+  (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu:
+    alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
 def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
