@@ -191,6 +191,31 @@ def cleanup_dead_axes(b:UOp):
 def gate_substitute(ctx, b:UOp) -> None:
   if not any(r in b.ranges for r in ctx.keys()): raise BottomUpGate()
 pm_gate_substitute = PatternMatcher([(UPat(GroupOp.All, name="b"), gate_substitute)], compiled=False)
+
+def _is_simple_gather_reduce(src:UOp) -> bool:
+  if src.op is not Ops.REDUCE or src.arg is not Ops.ADD or len(src.src) != 2: return False
+  expr, red = src.src
+  if red.op is not Ops.RANGE or expr.op is not Ops.WHERE: return False
+  cond, if_zero, _ = expr.src
+  if if_zero.op is not Ops.CONST or if_zero.arg != 0: return False
+  if cond.op is not Ops.CMPNE or len(cond.src) != 2: return False
+  lhs = cond.src[0]
+  if lhs.op is Ops.CAST: lhs = lhs.src[0]
+  if lhs.op is not Ops.INDEX: return False
+  rhs = cond.src[1]
+  return rhs is red or (rhs.op is Ops.CAST and rhs.src[0] is red)
+
+def _prefer_gated_indexes(root:UOp) -> UOp:
+  gated_indexes: dict[tuple[UOp, UOp], UOp] = {}
+  for u in root.toposort():
+    if u.op is not Ops.INDEX or len(u.src) != 3: continue
+    gated_indexes.setdefault((u.src[0], u.src[1]), u)
+  if not gated_indexes: return root
+  return graph_rewrite(root, PatternMatcher([
+    (UPat(Ops.INDEX, src=(UPat.var("buf"), UPat.var("idx"))),
+     lambda ctx,buf,idx: ctx.get((buf, idx))),
+  ]), ctx=gated_indexes, name="prefer_gated_indexes")
+
 # if a buffer is being stored just for permutes or something, remove it
 # we want to reexpress the indexes of idx2 in terms of the implied b1
 def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
@@ -235,6 +260,10 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
     UOp.sink(*[x.src[0] for x in reduces]).toposort(gate=buf_gate)
     del buf_gate
     if buffer_in_reduce:
+      # preserve simple chained gather fusion without forcing a LOCAL scratch buffer
+      if _is_simple_gather_reduce(src):
+        subbed = src.substitute({k:v for k,v in zip(buf.src[1:], idx.src[1:]) if k.op is not Ops.CONST}, extra_pm=pm_gate_substitute)
+        return _prefer_gated_indexes(graph_rewrite(subbed, symbolic, name="gather_reduce_compose"))
       if PCONTIG > 2:
         out_in_ratio = (prod(buf.shape)+1) / (sum([x.size for x in accessed_buffers])+1)
         if out_in_ratio < 10: return None
@@ -436,7 +465,13 @@ def handle_after(ctx:LocalAddBufferContext, after:UOp):
   buf = after.buf_uop
   # HACK to put the buffer in the MAP instead of MSTACK/MSELECT
   if buf.op in {Ops.MSTACK, Ops.MSELECT}: buf = buf.src[0]
-  assert buf not in ctx.map
+  if buf in ctx.map:
+    old_after = ctx.map[buf]
+    if old_after.op is not Ops.AFTER:
+      ctx.map[buf] = after
+    else:
+      ctx.map[buf] = old_after.src[0].after(*dedup(old_after.src[1:] + after.src[1:]))
+    return buf
   ctx.map[buf] = after
   return buf
 
@@ -571,7 +606,8 @@ def found_contiguous(ctx:dict[UOp, UOp], contig:UOp, src:UOp):
   ctx[src.base] = contig
 replace_contiguous = PatternMatcher([
   (UPat(Ops.CONTIGUOUS, src=(UPat(GroupOp.Movement, name="src"),), name="contig"), found_contiguous),
-  (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu: alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
+  (UPat(GroupOp.ALU, name="alu"), lambda ctx,alu:
+    alu.replace(src=new_src) if (new_src:=tuple(ctx.get(s, s) for s in alu.src)) != alu.src else None),
 ])
 
 def get_rangeify_map(sink:UOp) -> dict[UOp, UOp]:
