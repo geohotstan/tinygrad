@@ -193,5 +193,17 @@ class TestFunction(unittest.TestCase):
     np.testing.assert_equal(a.numpy(), [1,2,3])
     np.testing.assert_equal(b.numpy(), [10,20,30])
 
+  # repro for function call lowering hitting symbolic const fold with Invalid + int.
+  @unittest.expectedFailure
+  def test_function_cat_empty_slice_invalid_add(self):
+    @function
+    def f(uv:Tensor) -> Tensor:
+      return uv[..., :1].cat(uv[..., :1][..., 1:], dim=-1)
+
+    uv = Tensor.eye(3).cat(Tensor.eye(3), dim=-2)
+    out = f(uv)
+    np.testing.assert_equal(out.shape, (6,1))
+    out.numpy()
+
 if __name__ == '__main__':
   unittest.main()

@@ -3502,6 +3502,8 @@ class Tensor(OpMixin):
     V = batched_eye(num, self.dtype)
     UV = to_pair_order(U).cat(to_pair_order(V), dim=-2)
 
+    from tinygrad.function import function
+    @function
     def one_round_jacobi(UV):
       # UV is kept in pair-order across rounds to avoid repeated permute/unpermute gathers
       U_left, U_right, _ = split_pairs(UV[..., :num, :])

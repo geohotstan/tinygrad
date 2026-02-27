@@ -43,7 +43,7 @@ class TestLinAlg(unittest.TestCase):
   def test_svd_nonfull_3_5(self): self._test_svd_nonfull((3,5))
   def test_svd_nonfull_2_2_2_2_3(self): self._test_svd_nonfull((2,2,2,2,3))
 
-  @unittest.skip("very big. recommend wrapping with TinyJit around inner function")
+  # @unittest.skip("very big. recommend wrapping with TinyJit around inner function")
   def test_svd_large(self):
     size = (1024,1024)
     a = Tensor.randn(size).realize()
