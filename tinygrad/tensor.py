@@ -2752,36 +2752,18 @@ class Tensor(OpMixin):
     """
     x, dim = self, self._resolve_dim(dim)
     if (orig_len := int(x.shape[dim])) <= 1: return x, x.zeros_like(dtype=dtypes.default_int)
-    # pad to power of 2
-    n_stages = (orig_len-1).bit_length()
-    pads = tuple((0, 2**n_stages - orig_len) if i == dim else None for i in range(x.ndim))
-    x = x.pad(pads, value=dtypes.min(x.dtype) if descending else dtypes.max(x.dtype)).unflatten(dim, (2,)*n_stages)
-    # https://en.wikipedia.org/wiki/Bitonic_sorter#/media/File:BitonicSort1.svg
-    for stage in range(1, n_stages+1):
-      if stage != n_stages:
-        # flip so arrows of green boxes point the same way as blue boxes
-        crossover_dim = dim + n_stages - stage - 1
-        blue_box, green_box = x.split(1, crossover_dim)
-        flip_dims = tuple(-i for i in range(1, stage+1+(self.ndim-dim)))
-        x = (blue_box.cat(green_box.flip(flip_dims), dim=crossover_dim)).contiguous()
-      for substage in range(stage-1, -1, -1):
-        partner_dim = dim + n_stages - substage - 1
-        x_top, x_bottom = x.split(1, partner_dim)
-        x_larger, x_smaller = x_top.maximum(x_bottom), x_top.minimum(x_bottom)
-        x = (x_larger.cat(x_smaller, dim=partner_dim) if descending else x_smaller.cat(x_larger, dim=partner_dim)).contiguous()
-      if stage != n_stages:
-        # flip wires back to undo the crossover
-        blue_box, flipped_green_box = x.split(1, crossover_dim)
-        x = blue_box.cat(flipped_green_box.flip(flip_dims), dim=crossover_dim)
-    x = x.flatten(dim, dim+n_stages-1).shrink_to(self.shape)
-    # compute indices for sorted values
-    mask = Tensor.ones(orig_len, orig_len, dtype=dtypes.bool, device=self.device).tril().reshape((None, None) + (1,)*(self.ndim-dim-1))
-    def compute_counts(t:Tensor): return (mask & (t.unsqueeze(dim) == t.unsqueeze(dim+1))).sum(dim+1)
-    count_orig, count_sorted = compute_counts(self), compute_counts(x)
-    cond = (self.unsqueeze(dim+1) == x.unsqueeze(dim)) & (count_orig.unsqueeze(dim+1) == count_sorted.unsqueeze(dim))
-    idx = Tensor.arange(orig_len, device=self.device).reshape(tuple(orig_len if i == dim else 1 for i in range(x.ndim)))
-    idx = (cond * idx.unsqueeze(dim+1)).sum(dim)
-    return x, idx
+    # stable order is produced by ranking each element against all others with index tiebreak
+    idx_shape = tuple(orig_len if i == dim else 1 for i in range(x.ndim))
+    idx = Tensor.arange(orig_len, device=self.device, dtype=dtypes.default_int).reshape(idx_shape)
+    xi, xj = x.unsqueeze(dim+1), x.unsqueeze(dim)
+    ii, jj = idx.unsqueeze(dim+1), idx.unsqueeze(dim)
+    before = (xj > xi) | ((xj == xi) & (jj < ii)) if descending else (xj < xi) | ((xj == xi) & (jj < ii))
+    rank = before.sum(dim+1, dtype=dtypes.default_int)
+    # invert rank permutation into source indices for each output position
+    pos_shape = tuple(orig_len if i == dim+1 else 1 for i in range(x.ndim+1))
+    pos = Tensor.arange(orig_len, device=self.device, dtype=dtypes.default_int).reshape(pos_shape)
+    source_idx = (rank.unsqueeze(dim+1) == pos).where(ii, 0).sum(dim, dtype=dtypes.default_int)
+    return x.gather(dim, source_idx), source_idx
 
   def argsort(self, dim:int=-1, descending:bool=False) -> Tensor:
     """
