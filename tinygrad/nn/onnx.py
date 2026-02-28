@@ -139,7 +139,10 @@ class OnnxPBParser:
 
   def parse(self) -> dict:
     """Parses the ONNX model into a nested dictionary. """
-    return self._parse_ModelProto()
+    try: return self._parse_ModelProto()
+    except Exception as e:
+      raise ValueError(f"""ONNX model parsing failed: {e}
+Try `onnx.load()` to verify the model. If it loads, please file an issue on tinygrad GitHub.""") from e
 
   def _parse_message(self, end_pos: int) -> Generator[tuple[int, WireType], None, None]:
     while self.reader.tell() < end_pos:
