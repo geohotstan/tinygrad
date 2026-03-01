@@ -14,6 +14,16 @@ class TestGetitemOps(unittest.TestCase):
     # row gather (4x32) then column gather (4x3)
     self.assertEqual(len(out.schedule()), 2)
 
+  def test_two_tensor_same_shape_indices_single_stage(self):
+    src_np = np.arange(10*100*200, dtype=np.float32).reshape(10, 100, 200)
+    idx1_np = np.array([[1, 3, 5], [2, 4, 6]], dtype=np.int32)
+    idx2_np = np.array([[7, 9, 11], [8, 10, 12]], dtype=np.int32)
+    src, idx1, idx2 = Tensor(src_np).realize(), Tensor(idx1_np).realize(), Tensor(idx2_np).realize()
+    out = src[0, idx1, idx2]
+    np.testing.assert_equal(out.numpy(), src_np[0, idx1_np, idx2_np])
+    # Same-shape advanced indices should fuse to one stage.
+    self.assertEqual(len(out.schedule()), 1)
+
   def test_two_tensor_indices(self):
     # linear indexing is O(idx_size), one-hot masks is O(idx_size * src_size)
     src_np = np.random.rand(10, 100, 200).astype(np.float32)
