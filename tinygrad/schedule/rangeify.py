@@ -203,18 +203,14 @@ def remove_bufferize(src:UOp, buf:UOp, idx:UOp):
     if len(accessed_buffers) > 3 and not (PCONTIG > 2): return None
 
     # if any reduces access a buffer, don't remove this buffer
-    # NOTE: we allow a narrow special case for chained advanced indexing:
-    #   reduce(...) -> bufferize -> index(with reduce axis) -> reduce(...)
-    # This lets us inline the first gather stage and avoid splitting into two kernels.
-    reduce_inputs = UOp.sink(*[x.src[0] for x in reduces])
-    reduce_topo = reduce_inputs.toposort()
-    reduce_has_param = any(x.op is Ops.PARAM for x in reduce_topo)
-    reduce_has_bufferize = any(x.op is Ops.BUFFERIZE for x in reduce_topo)
-    buffer_in_reduce = reduce_has_param or reduce_has_bufferize
-    allow_reduce_debufferize = src.op is Ops.REDUCE and src.arg is Ops.ADD and not reduce_has_bufferize and \
-      any(any(r.arg[-1] is AxisType.REDUCE for r in i.ranges) for i in idx.src[1:])
-
-    if buffer_in_reduce and not allow_reduce_debufferize:
+    buffer_in_reduce = False
+    def buf_gate(x:UOp):
+      nonlocal buffer_in_reduce
+      if x.op in {Ops.PARAM, Ops.BUFFERIZE}: buffer_in_reduce = True
+      return not buffer_in_reduce
+    UOp.sink(*[x.src[0] for x in reduces]).toposort(gate=buf_gate)
+    del buf_gate
+    if buffer_in_reduce:
       if PCONTIG > 2:
         out_in_ratio = (prod(buf.shape)+1) / (sum([x.size for x in accessed_buffers])+1)
         if out_in_ratio < 10: return None
