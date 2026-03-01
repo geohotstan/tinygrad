@@ -1254,6 +1254,33 @@ class Tensor(OpMixin):
       mask, x = (y.permute(*range(dims[0], dims[0]+len(big_shape)), *range(0, dims[0]), *range(dims[0]+len(big_shape), y.ndim)) for y in (mask, x))
     return x, mask, sum_axis, x_pre, permuted
 
+  def _advanced_getitem(self, x:Tensor, dims:list[int], tensors:list[Tensor]) -> Tensor:
+    try:
+      # advanced getitem: iteratively apply one-hot masks and reduce each indexed axis
+      max_index_ndim = max(t.ndim for t in tensors)
+      index_tensors = [t.reshape((1,)*(max_index_ndim - t.ndim) + t.shape) for t in tensors]
+      reduce_axes = [axis + max_index_ndim - i for i, axis in enumerate(dims)]
+
+      first_axis, first_index = dims[0], index_tensors[0]
+      first_index_view = first_index.reshape((1,)*first_axis + (1,) + first_index.shape + (1,)*(x.ndim-first_axis-1))
+      first_axis_range = Tensor.arange(x.shape[first_axis], dtype=dtypes.int32, requires_grad=False, device=self.device) \
+        .reshape((1,)*first_axis + (x.shape[first_axis],) + (1,)*first_index.ndim + (1,)*(x.ndim-first_axis-1))
+      expanded = x.reshape(x.shape[:first_axis+1] + (1,)*first_index.ndim + x.shape[first_axis+1:])
+      x = (expanded * (first_axis_range == first_index_view)).sum(first_axis, dtype=x.dtype)
+
+      for index_tensor, axis in zip(index_tensors[1:], reduce_axes[1:]):
+        index_view = index_tensor.reshape((1,)*first_axis + index_tensor.shape + (1,)*(x.ndim-first_axis-index_tensor.ndim))
+        axis_range = Tensor.arange(x.shape[axis], dtype=dtypes.int32, requires_grad=False, device=self.device) \
+          .reshape((1,)*axis + (x.shape[axis],) + (1,)*(x.ndim-axis-1))
+        x = (x * (index_view == axis_range)).sum(axis, dtype=x.dtype)
+
+      separated_advanced = first_axis != 0 and len(dims) != 1 and tuple(dims) != tuple(range(first_axis, dims[-1]+1))
+      if separated_advanced:
+        x = x.permute(*range(first_axis, first_axis+first_index.ndim), *range(0, first_axis), *range(first_axis+first_index.ndim, x.ndim))
+      return x  # advanced getitem
+    except ValueError as err:
+      raise IndexError(f"cannot broadcast indices: {err}") from err
+
   def __getitem__(self, indices) -> Tensor:
     """
     Retrieves a sub-tensor using indexing.
@@ -1297,20 +1324,8 @@ class Tensor(OpMixin):
     if (tensor_index := self._tensor_index_info(x_dims)) is None: return x
 
     # tensor indexing
-    dims, tensors, big_shape = tensor_index
-
-    # consecutive tensor indices with int shapes: use linear indexing instead of one-hot masks
-    consecutive = dims == list(range(dims[0], dims[0] + len(dims)))
-    if len(dims) > 1 and consecutive and all_int(ishp := tuple(x.shape[d] for d in dims)):
-      strides = tuple(prod(ishp[i+1:]) for i in range(len(dims)))
-      try: linear_idx = functools.reduce(Tensor.add, (t._broadcast_to(big_shape) * s for t, s in zip(tensors, strides)))
-      except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
-      valid = functools.reduce(Tensor.__and__, ((t >= 0) & (t < s) for t, s in zip(tensors, ishp)))
-      pre, post = x.shape[:dims[0]], x.shape[dims[-1]+1:]
-      x = x.reshape(pre + (prod(ishp),) + post)[tuple([slice(None)] * len(pre)) + (valid.where(linear_idx, 0),)]
-      return valid.reshape((1,) * len(pre) + big_shape + (1,) * len(post)).where(x, 0)
-    x, _, _, _, _ = self._reduce_tensor_indices(x, dims, tensors, big_shape)
-    return x  # advanced getitem
+    dims, tensors, _ = tensor_index
+    return self._advanced_getitem(x, dims, tensors)
 
   def __setitem__(self, indices, v:Tensor|PyConst|list|tuple) -> None:
     if isinstance(v, Tensor) and v.dtype != self.dtype: raise RuntimeError(f"setitem dtype mismatch: {self.dtype=} != {v.dtype=}")
