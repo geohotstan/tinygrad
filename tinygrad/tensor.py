@@ -1203,81 +1203,40 @@ class Tensor(OpMixin):
       if index is not None: dim += 1
     return indices_parsed
 
-  def _index_view(self, indices_parsed:list[dict[str, Any]]) -> tuple[Tensor, list[dict[str, Any]], list[dict[str, Any]]]:
-    x, mops = self, [i for i in indices_parsed if i['index'] is not None]
+  def _apply_index_mop(self, mops):
+    x = self
+    # flip negative strides
+    x = x.shrink(tuple(m['boundary'] for m in mops)).flip(tuple(i for i, m in enumerate(mops) if m['stride'] < 0))
+    strides = tuple(abs(m['stride']) for m in mops)
+    # apply stride
+    if any(st != 1 for st in strides):
+      # pad shape to multiple of stride
+      if not all_int(x.shape): raise RuntimeError("symbolic shape not supported")
+      x = x.pad_to(tuple(round_up(s, st) for s, st in zip(x.shape, strides)))
+      x = x.reshape(tuple(flatten((s // st, st) for s, st in zip(x.shape, strides))))
+      x = x.shrink(tuple(flatten(((0, s), (0, 1)) for s in x.shape[::2]))).reshape(x.shape[::2])
+    return x
 
-    # movement op indexing
-    if mops:
-      # flip negative strides
-      x = x.shrink(tuple(m['boundary'] for m in mops)).flip(tuple(i for i, m in enumerate(mops) if m['stride'] < 0))
-      strides = tuple(abs(m['stride']) for m in mops)
-      # apply stride
-      if any(st != 1 for st in strides):
-        # pad shape to multiple of stride
-        if not all_int(x.shape): raise RuntimeError("symbolic shape not supported")
-        x = x.pad_to(tuple(round_up(s, st) for s, st in zip(x.shape, strides)))
-        x = x.reshape(tuple(flatten((s // st, st) for s, st in zip(x.shape, strides))))
-        x = x.shrink(tuple(flatten(((0, s), (0, 1)) for s in x.shape[::2]))).reshape(x.shape[::2])
+  def _prepare_advanced_indices(self, dims:list[int], tensors:list[Tensor]) -> tuple[int, int, list[Tensor], bool]:
+    max_index_ndim = max(t.ndim for t in tensors)
+    index_tensors = [t.reshape((1,)*(max_index_ndim - t.ndim) + t.shape) for t in tensors]
+    first_axis = dims[0]
+    separated = first_axis != 0 and len(dims) != 1 and tuple(dims) != tuple(range(first_axis, dims[-1]+1))
+    return first_axis, max_index_ndim, index_tensors, separated
 
-    # dim injection from None (size 1) and dim collapse by skipping sint dims
-    x_dims = [p for p in indices_parsed if not isinstance(p['index'], sint)]
-    return x.reshape(tuple(p['size'] for p in x_dims)), mops, x_dims
-
-  def _tensor_index_info(self, x_dims:list[dict[str, Any]]) -> tuple[list[int], list[Tensor], tuple[sint, ...]]|None:
-    if not (tops := [(d, p) for d, p in enumerate(x_dims) if isinstance(p['index'], Tensor)]): return None
-    dims, tensors = [d for d, _ in tops], cast(list[Tensor], [p['index'] for _, p in tops])
-    return dims, tensors, _broadcast_shape(*(t.shape for t in tensors))
-
-  def _reduce_tensor_indices(self, x:Tensor, dims:list[int], tensors:list[Tensor], big_shape:tuple[sint, ...]) \
-      -> tuple[Tensor, Tensor, tuple[int, ...], Tensor, bool]:
-    masks = []
-    pre_reduce_shape = x.shape[:dims[0]] + big_shape + x.shape[dims[0]:]
-
-    # create index masks
-    for dim, tensor in zip(dims, tensors):
-      try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
-      except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
-      masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
-
-    # reduce masks to 1 mask
-    mask: Tensor = functools.reduce(lambda x,y: x.mul(y), masks)
-
-    # inject 1's for the extra dims added in create masks
-    reshape_arg = x.shape[:dims[0]] + (1,) * len(big_shape) + x.shape[dims[0]:]
-    # sum reduce the extra dims introduced in create masks
-    x_pre = x
-    x = (mask.where(x.reshape(reshape_arg), 0)).sum(sum_axis:=tuple(d + len(big_shape) for d in dims), dtype=x.dtype)
-
-    # special permute case
-    permuted = dims[0] != 0 and len(dims) != 1 and tuple(dims) != tuple(range(dims[0], dims[-1]+1))
-    if permuted:
-      mask, x = (y.permute(*range(dims[0], dims[0]+len(big_shape)), *range(0, dims[0]), *range(dims[0]+len(big_shape), y.ndim)) for y in (mask, x))
-    return x, mask, sum_axis, x_pre, permuted
+  def _permute_separated_advanced(self, x:Tensor, first_axis:int, index_ndim:int) -> Tensor:
+    return x.permute(*range(first_axis, first_axis+index_ndim), *range(0, first_axis), *range(first_axis+index_ndim, x.ndim))
 
   def _advanced_getitem(self, x:Tensor, dims:list[int], tensors:list[Tensor]) -> Tensor:
     try:
-      # advanced getitem: iteratively apply one-hot masks and reduce each indexed axis
-      max_index_ndim = max(t.ndim for t in tensors)
-      index_tensors = [t.reshape((1,)*(max_index_ndim - t.ndim) + t.shape) for t in tensors]
-      reduce_axes = [axis + max_index_ndim - i for i, axis in enumerate(dims)]
-
-      first_axis, first_index = dims[0], index_tensors[0]
-      first_index_view = first_index.reshape((1,)*first_axis + (1,) + first_index.shape + (1,)*(x.ndim-first_axis-1))
-      first_axis_range = Tensor.arange(x.shape[first_axis], dtype=dtypes.int32, requires_grad=False, device=self.device) \
-        .reshape((1,)*first_axis + (x.shape[first_axis],) + (1,)*first_index.ndim + (1,)*(x.ndim-first_axis-1))
-      expanded = x.reshape(x.shape[:first_axis+1] + (1,)*first_index.ndim + x.shape[first_axis+1:])
-      x = (expanded * (first_axis_range == first_index_view)).sum(first_axis, dtype=x.dtype)
-
-      for index_tensor, axis in zip(index_tensors[1:], reduce_axes[1:]):
-        index_view = index_tensor.reshape((1,)*first_axis + index_tensor.shape + (1,)*(x.ndim-first_axis-index_tensor.ndim))
-        axis_range = Tensor.arange(x.shape[axis], dtype=dtypes.int32, requires_grad=False, device=self.device) \
-          .reshape((1,)*axis + (x.shape[axis],) + (1,)*(x.ndim-axis-1))
-        x = (x * (index_view == axis_range)).sum(axis, dtype=x.dtype)
-
-      separated_advanced = first_axis != 0 and len(dims) != 1 and tuple(dims) != tuple(range(first_axis, dims[-1]+1))
-      if separated_advanced:
-        x = x.permute(*range(first_axis, first_axis+first_index.ndim), *range(0, first_axis), *range(first_axis+first_index.ndim, x.ndim))
-      return x  # advanced getitem
+      first_axis, index_ndim, index_tensors, separated = self._prepare_advanced_indices(dims, tensors)
+      reduce_axes = [first_axis] + [axis + index_ndim - i for i, axis in enumerate(dims[1:], start=1)]
+      x = x.reshape(x.shape[:first_axis+1] + (1,)*index_ndim + x.shape[first_axis+1:])
+      for step, (index_tensor, axis) in enumerate(zip(index_tensors, reduce_axes)):
+        prefix = first_axis + (1 if step == 0 else 0)
+        index = index_tensor.reshape((1,)*prefix + index_tensor.shape + (1,)*(x.ndim - prefix - index_tensor.ndim))
+        x = (x * index._one_hot_along_dim(x.shape[axis], dim=axis)).sum(axis, dtype=x.dtype)
+      return self._permute_separated_advanced(x, first_axis, index_ndim) if separated else x
     except ValueError as err:
       raise IndexError(f"cannot broadcast indices: {err}") from err
 
@@ -1319,12 +1278,22 @@ class Tensor(OpMixin):
     print(t[Tensor([4, 3, 2])].numpy())
     ```
     """
-    indices_parsed = self._parse_indices(indices)
-    x, _, x_dims = self._index_view(indices_parsed)
-    if (tensor_index := self._tensor_index_info(x_dims)) is None: return x
+    x = self
+    # validate and parse indices into -> [{'index', 'size', 'boundary', 'stride'}, ...]
+    indices_parsed = x._parse_indices(indices)
 
-    # tensor indexing
-    dims, tensors, _ = tensor_index
+    # Apply index view
+    mops = [i for i in indices_parsed if i['index'] is not None]
+    x_dims = [i for i in indices_parsed if not isinstance(i['index'], sint)]
+    # apply index view without dim injection or collapse
+    if mops: x = x._apply_index_mop(mops)
+    # apply dim injection or collapse
+    x = x.reshape(tuple(p['size'] for p in x_dims))
+
+    # Apply Tensor advanced indexing
+    tops = [(d, p) for d, p in enumerate(x_dims) if isinstance(p['index'], Tensor)]
+    if not tops: return x
+    dims, tensors = [d for d, _ in tops], cast(list[Tensor], [p['index'] for _, p in tops])
     return self._advanced_getitem(x, dims, tensors)
 
   def __setitem__(self, indices, v:Tensor|PyConst|list|tuple) -> None:
@@ -1360,21 +1329,42 @@ class Tensor(OpMixin):
         setitem_op = self.replace
 
     assert isinstance(v, Tensor) and setitem_op is not None
-    x, mops, x_dims = self._index_view(indices_parsed)
+    mops = [i for i in indices_parsed if i['index'] is not None]
+    x_dims = [i for i in indices_parsed if not isinstance(i['index'], sint)]
+    x = self._apply_index_mop(mops) if mops else self
+    x = x.reshape(tuple(p['size'] for p in x_dims))
 
     # tensor indexing
-    if (tensor_index := self._tensor_index_info(x_dims)) is not None:
-      dims, tensors, big_shape = tensor_index
-      x, mask, sum_axis, x_pre, permuted = self._reduce_tensor_indices(x, dims, tensors, big_shape)
+    tops = [(d, p) for d, p in enumerate(x_dims) if isinstance(p['index'], Tensor)]
+    if tops:
+      dims, tensors = [d for d, _ in tops], cast(list[Tensor], [p['index'] for _, p in tops])
+      x_pre = x
+      x = self._advanced_getitem(x, dims, tensors)
+      try:
+        first_axis, index_ndim, index_tensors, permuted = self._prepare_advanced_indices(dims, tensors)
+        mask: Tensor|None = None
+        for index_tensor, axis in zip(index_tensors, dims):
+          index_view = index_tensor.reshape((1,)*first_axis + index_tensor.shape + (1,)*(x_pre.ndim-first_axis))
+          axis_pos = axis + index_ndim
+          axis_range = Tensor.arange(x_pre.shape[axis], dtype=dtypes.int32, requires_grad=False, device=self.device) \
+            .reshape((1,)*axis_pos + (x_pre.shape[axis],) + (1,)*(x_pre.ndim + index_ndim - axis_pos - 1))
+          axis_mask = index_view == axis_range
+          mask = axis_mask if mask is None else (mask * axis_mask)
+        assert mask is not None
+        if permuted: mask = self._permute_separated_advanced(mask, first_axis, index_ndim)
+      except ValueError as err:
+        raise IndexError(f"cannot broadcast indices: {err}") from err
+
       # advanced setitem: resolve tensor dims in collapsed space, then fall through to basic setitem path
       vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x.shape, v.shape))
-      for dim in sum_axis: vb = vb.unsqueeze(dim)  # add back reduced dims from sum
+      for dim in tuple(d + index_ndim for d in dims): vb = vb.unsqueeze(dim)  # add back reduced dims from sum
       start = dims[0] if not permuted else 0
-      vb = _masked_setitem(x_pre, vb, mask, tuple(range(start, start + len(big_shape))))
+      vb = _masked_setitem(x_pre, vb, mask, tuple(range(start, start + index_ndim)))
     else: # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
       vb = v.cast(self.dtype)._broadcast_to(x.shape)
 
     vb = vb.reshape(tuple(1 if isinstance(p['index'], sint) else p['size'] for p in indices_parsed if p['index'] is not None))
+
     per_dim = []
     for d, m in enumerate(mops):
       (s, e), st = m['boundary'], abs(m['stride'])
@@ -1387,7 +1377,8 @@ class Tensor(OpMixin):
       per_dim.append((idx >= s) & (idx < e) & (((e-1-idx) if m['stride'] < 0 else (idx-s)) % st == 0))
     vb = vb.flip(tuple(d for d, m in enumerate(mops) if m['stride'] < 0))
     vb = vb.pad(tuple((m['boundary'][0], self.shape[d] - m['boundary'][1]) for d, m in enumerate(mops)))
-    setitem_op((functools.reduce(lambda a, b: a & b, per_dim) if per_dim else Tensor(True, dtype=dtypes.bool, device=self.device)).where(vb, self))
+    mask = functools.reduce(lambda a, b: a & b, per_dim) if per_dim else Tensor(True, dtype=dtypes.bool, device=self.device)
+    setitem_op(mask.where(vb, self))
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
