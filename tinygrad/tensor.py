@@ -1229,32 +1229,14 @@ class Tensor(OpMixin):
 
   def _advanced_getitem(self, x:Tensor, dims:list[int], tensors:list[Tensor]) -> Tensor:
     try:
-      # single tensor index uses iterative one-hot reduction (base case for indexing recursion)
-      if len(dims) == 1:
-        first_axis, index_ndim, index_tensors, _ = self._prepare_advanced_indices(dims, tensors)
-        x = x.reshape(x.shape[:first_axis+1] + (1,)*index_ndim + x.shape[first_axis+1:])
-        index = index_tensors[0].reshape((1,)*(first_axis+1) + index_tensors[0].shape + (1,)*(x.ndim - first_axis - index_tensors[0].ndim - 1))
-        return (x * index._one_hot_along_dim(x.shape[first_axis], dim=first_axis)).sum(first_axis, dtype=x.dtype)
-
-      # multi-tensor advanced indexing: flatten indexed axes and gather once with linear idx
-      first_axis = dims[0]
-      big_shape = _broadcast_shape(*(t.shape for t in tensors))
-      idx_tensors = [t._broadcast_to(big_shape) for t in tensors]
-      idx_shape = tuple(x.shape[d] for d in dims)
-      strides = tuple(prod(idx_shape[i+1:]) for i in range(len(idx_shape)))
-      linear_idx = functools.reduce(Tensor.add, (idx * st for idx, st in zip(idx_tensors, strides)))
-      valid = functools.reduce(Tensor.__and__, ((idx >= 0) & (idx < s) for idx, s in zip(idx_tensors, idx_shape)))
-
-      post_axes = [a for a in range(first_axis, x.ndim) if a not in set(dims)]
-      permute_axes = [*range(first_axis), *dims, *post_axes]
-      pre_shape, post_shape = x.shape[:first_axis], tuple(x.shape[a] for a in post_axes)
-      if tuple(permute_axes) != tuple(range(x.ndim)): x = x.permute(*permute_axes)
-      x = x.reshape(pre_shape + (prod(idx_shape),) + post_shape)
-      x = x[tuple([slice(None)] * first_axis) + (valid.where(linear_idx, 0),)]
-      x = valid.reshape((1,) * first_axis + big_shape + (1,) * len(post_shape)).where(x, 0)
-
-      separated = first_axis != 0 and tuple(dims) != tuple(range(first_axis, dims[-1]+1))
-      return self._permute_separated_advanced(x, first_axis, len(big_shape)) if separated else x
+      first_axis, index_ndim, index_tensors, separated = self._prepare_advanced_indices(dims, tensors)
+      reduce_axes = [first_axis] + [axis + index_ndim - i for i, axis in enumerate(dims[1:], start=1)]
+      x = x.reshape(x.shape[:first_axis+1] + (1,)*index_ndim + x.shape[first_axis+1:])
+      for step, (index_tensor, axis) in enumerate(zip(index_tensors, reduce_axes)):
+        prefix = first_axis + (1 if step == 0 else 0)
+        index = index_tensor.reshape((1,)*prefix + index_tensor.shape + (1,)*(x.ndim - prefix - index_tensor.ndim))
+        x = (x * index._one_hot_along_dim(x.shape[axis], dim=axis)).sum(axis, dtype=x.dtype)
+      return self._permute_separated_advanced(x, first_axis, index_ndim) if separated else x
     except ValueError as err:
       raise IndexError(f"cannot broadcast indices: {err}") from err
 
