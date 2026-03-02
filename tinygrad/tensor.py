@@ -1240,7 +1240,7 @@ class Tensor(OpMixin):
       if separated: x_idx = x_idx.permute(*range(first_axis, first_axis + index_ndim), *range(0, first_axis), *range(first_axis + index_ndim, x_idx.ndim))
       if v is None: return x_idx
 
-      # advanced setitem path: reduce repeated writes with last-write-wins
+      # advanced setitem path: resolve repeated writes with _masked_setitem
       vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x_idx.shape, v.shape))
       masks: list[Tensor] = []
       for dim, tensor in zip(dims, tensors):
@@ -1254,17 +1254,7 @@ class Tensor(OpMixin):
         mask = mask.permute(*range(first_axis, first_axis+len(big_shape)), *range(0, first_axis), *range(first_axis+len(big_shape), mask.ndim))
       for dim in sum_axis: vb = vb.unsqueeze(dim)
       start = first_axis if not separated else 0
-      if reduce_range := tuple(range(start, start + len(big_shape))):
-        if len(reduce_range) > 1:
-          mask = mask.flatten(reduce_range[0], reduce_range[-1])
-          vb = vb.flatten(reduce_range[0], reduce_range[-1])
-        axis = reduce_range[0]
-        if mask.shape[axis] == 0: vb = x_pre
-        else:
-          mask_i = mask.cast(dtypes.int32)
-          selected = mask & (mask_i.cumsum(axis) == mask_i.sum(axis, keepdim=True))
-          vb = selected.any(axis).where(selected.where(vb, 0).sum(axis, dtype=vb.dtype), x_pre)
-      else: vb = mask.where(vb, x_pre)
+      vb = _masked_setitem(x_pre, vb, mask, tuple(range(start, start + len(big_shape))))
     elif v is None: return x  # basic getitem
     # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
     else: vb = v.cast(self.dtype)._broadcast_to(x.shape)
