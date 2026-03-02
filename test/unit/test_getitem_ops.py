@@ -17,5 +17,17 @@ class TestGetitemOps(unittest.TestCase):
     np.testing.assert_allclose(src_np[:, idx1_np, idx2_np], src[:, idx1, idx2].numpy())
     self.assertLess(GlobalCounters.global_ops, 500_000)
 
+  def test_two_tensor_indices_non_linear(self):
+    # linear indexing is O(idx_size), one-hot masks is O(idx_size * src_size)
+    src_np = np.random.rand(100, 10, 200).astype(np.float32)
+    idx1_np, idx2_np = np.random.randint(0, 100, (50, 60), dtype=np.int32), np.random.randint(0, 200, (50, 60), dtype=np.int32)
+    src, idx1, idx2 = Tensor(src_np), Tensor(idx1_np), Tensor(idx2_np)
+    GlobalCounters.reset()
+    np.testing.assert_allclose(src_np[idx1_np, 0, idx2_np], src[idx1, 0, idx2].numpy())
+    self.assertLess(GlobalCounters.global_ops, 50_000)
+    GlobalCounters.reset()
+    np.testing.assert_allclose(src_np[idx1_np, :, idx2_np], src[idx1, :, idx2].numpy())
+    self.assertLess(GlobalCounters.global_ops, 500_000)
+
 if __name__ == '__main__':
   unittest.main()
