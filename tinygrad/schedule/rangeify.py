@@ -70,49 +70,6 @@ def split_reduceop(reduce:UOp, x:UOp):
   # reduce original axes, then split
   return splitted.r(*reduce.arg).contiguous().r(reduce.arg[0], (len(reduce.shape),)).reshape(reduce.shape)
 
-def _match_expand_reshape_reduce(x:UOp) -> tuple[UOp, tuple[sint, ...], tuple[sint, ...]]|None:
-  if x.op is not Ops.EXPAND: return None
-  out_shape = x.shape
-  rs = x.src[0]
-  if rs.op is not Ops.RESHAPE: return None
-  mid_shape = rs.shape
-  red = rs.src[0]
-  if red.op is not Ops.REDUCE_AXIS or red.arg[0] is not Ops.ADD: return None
-  return red, mid_shape, out_shape
-
-def early_fuse_broadcasted_2stage_gather(outer:UOp, lhs:UOp):
-  # Narrow one-step fusion for:
-  #   reduce_k( expand(reshape(reduce_i(base*mask_i))) * mask_k )
-  # with broadcasted index shapes (M,1) then (1,N).
-  if outer.arg[0] is not Ops.ADD or lhs.op is not Ops.MUL: return None
-  if outer.arg[1] != (2,): return None
-
-  a = _match_expand_reshape_reduce(lhs.src[0])
-  b = _match_expand_reshape_reduce(lhs.src[1])
-  if (a is None) == (b is None): return None
-  inner_reduce, mid_shape, out_shape = a if a is not None else b  # type: ignore[misc]
-  outer_mask = lhs.src[1] if a is not None else lhs.src[0]
-
-  if inner_reduce.arg[1] != (0,): return None
-  if outer_mask.shape != out_shape: return None
-  if not all_int(inner_reduce.shape + mid_shape + out_shape + inner_reduce.src[0].shape): return None
-
-  # expected shape pattern:
-  # inner_reduce: (1, M, 1, K) -> reshape: (M, 1, K) -> expand: (M, N, K)
-  if len(inner_reduce.shape) != 4 or len(mid_shape) != 3 or len(out_shape) != 3: return None
-  if inner_reduce.shape[0] != 1 or inner_reduce.shape[2] != 1: return None
-  if mid_shape != (inner_reduce.shape[1], 1, inner_reduce.shape[3]): return None
-  if out_shape[0] != mid_shape[0] or out_shape[2] != mid_shape[2]: return None
-
-  base = inner_reduce.src[0]
-  # base is expected to be (I, M, 1, K), expand middle-broadcast dim to N
-  if len(base.shape) != 4 or base.shape[1] != out_shape[0] or base.shape[3] != out_shape[2] or base.shape[2] != 1: return None
-
-  fused_base = base.expand((base.shape[0], base.shape[1], out_shape[1], base.shape[3]))
-  fused_mask = outer_mask.reshape((1, out_shape[0], out_shape[1], out_shape[2])).expand(fused_base.shape)
-  fused = (fused_base * fused_mask).r(Ops.ADD, (0, 3)).reshape(outer.shape)
-  return fused
-
 mop_cleanup = PatternMatcher([
   # merge adjacent RESHAPES
   (UPat(Ops.RESHAPE, src=(UPat(Ops.RESHAPE, name="x2"), UPat()), name="x"), lambda x,x2: x.replace(src=(x2.src[0], x.src[1]))),
@@ -144,7 +101,6 @@ earliest_rewrites = mop_cleanup+PatternMatcher([
 
   # split_reduceop
   (UPat(Ops.REDUCE_AXIS, name="reduce", src=(UPat.var("x"),)), split_reduceop),
-  (UPat(Ops.REDUCE_AXIS, name="outer", src=(UPat(Ops.MUL, name="lhs"),)), early_fuse_broadcasted_2stage_gather),
 
   # remove DETACH/CONTIGUOUS_BACKWARD (TODO: this is copied in allocations)
   (UPat((Ops.DETACH, Ops.CONTIGUOUS_BACKWARD), name="x"), lambda x: x.src[0]),

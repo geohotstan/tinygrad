@@ -5,14 +5,14 @@ from tinygrad import Tensor, GlobalCounters
 # NOTE: btw global_ops are 0 for both these tests
 
 class TestGetitemOps(unittest.TestCase):
-  def test_broadcasted_outer_indices_single_stage(self):
+  def test_broadcasted_outer_indices_stays_two_stage(self):
     src_np = np.arange(16*32, dtype=np.int32).reshape(16, 32)
     ib_np, jb_np = np.array([[1], [3], [7], [9]], dtype=np.int32), np.array([[2, 4, 6]], dtype=np.int32)
     src, ib, jb = Tensor(src_np).realize(), Tensor(ib_np).realize(), Tensor(jb_np).realize()
     out = src[ib, jb]
     np.testing.assert_equal(out.numpy(), src_np[ib_np, jb_np])
-    # broadcasted consecutive advanced indices should fuse to one stage.
-    self.assertEqual(len(out.schedule()), 1)
+    # row gather (4x32) then column gather (4x3)
+    self.assertEqual(len(out.schedule()), 2)
 
   def test_two_tensor_same_shape_indices_single_stage(self):
     src_np = np.arange(10*100*200, dtype=np.float32).reshape(10, 100, 200)
