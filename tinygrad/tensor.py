@@ -1221,52 +1221,50 @@ class Tensor(OpMixin):
     # tensor indexing
     if tops := [(d, p) for d, p in enumerate(x_dims) if isinstance(p['index'], Tensor)]:
       dims, tensors = [d for d, _ in tops], cast(list[Tensor], [p['index'] for _, p in tops])
+      first_axis = dims[0]
+      separated = first_axis != 0 and len(dims) != 1 and tuple(dims) != tuple(range(first_axis, dims[-1] + 1))
       try:
-        max_index_ndim = max(t.ndim for t in tensors)
-        index_tensors = [t.reshape((1,) * (max_index_ndim - t.ndim) + t.shape) for t in tensors]
-        first_axis = dims[0]
-        separated = first_axis != 0 and len(dims) != 1 and tuple(dims) != tuple(range(first_axis, dims[-1] + 1))
-        index_ndim = max_index_ndim
-        reduce_axes = [first_axis] + [axis + index_ndim - i for i, axis in enumerate(dims[1:], start=1)]
-
-        # advanced getitem path (also used to derive setitem broadcast shape)
-        x_idx = x.reshape(x.shape[:first_axis + 1] + (1,) * index_ndim + x.shape[first_axis + 1:])
-        for step, (index_tensor, axis) in enumerate(zip(index_tensors, reduce_axes)):
-          prefix = first_axis + (1 if step == 0 else 0)
-          index = index_tensor.reshape((1,) * prefix + index_tensor.shape + (1,) * (x_idx.ndim - prefix - index_tensor.ndim))
-          x_idx = (x_idx * index._one_hot_along_dim(x_idx.shape[axis], dim=axis)).sum(axis, dtype=x_idx.dtype)
-        if separated: x_idx = x_idx.permute(*range(first_axis, first_axis + index_ndim), *range(0, first_axis), *range(first_axis + index_ndim, x_idx.ndim))
-        if v is None: return x_idx
-
-        # advanced setitem path: reduce repeated writes with last-write-wins
-        vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x_idx.shape, v.shape))
         big_shape = _broadcast_shape(*(t.shape for t in tensors))
-        pre_reduce_shape = x.shape[:first_axis] + big_shape + x.shape[first_axis:]
-        masks: list[Tensor] = []
-        for dim, tensor in zip(dims, tensors):
-          i = tensor.reshape(tensor.shape + (1,)*(x.ndim - first_axis)).expand(pre_reduce_shape)
-          masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
-        mask: Tensor = functools.reduce(lambda a, b: a.mul(b), masks)
-
-        sum_axis = tuple(d + len(big_shape) for d in dims)
-        x_pre = x
-        if separated:
-          mask = mask.permute(*range(first_axis, first_axis+len(big_shape)), *range(0, first_axis), *range(first_axis+len(big_shape), mask.ndim))
-        for dim in sum_axis: vb = vb.unsqueeze(dim)
-        start = first_axis if not separated else 0
-        if reduce_axes := tuple(range(start, start + len(big_shape))):
-          if len(reduce_axes) > 1:
-            mask = mask.flatten(reduce_axes[0], reduce_axes[-1])
-            vb = vb.flatten(reduce_axes[0], reduce_axes[-1])
-          axis = reduce_axes[0]
-          if mask.shape[axis] == 0: vb = x_pre
-          else:
-            mask_i = mask.cast(dtypes.int32)
-            selected = mask & (mask_i.cumsum(axis) == mask_i.sum(axis, keepdim=True))
-            vb = selected.any(axis).where(selected.where(vb, 0).sum(axis, dtype=vb.dtype), x_pre)
-        else: vb = mask.where(vb, x_pre)
+        tensors = [t._broadcast_to(big_shape) for t in tensors]
       except ValueError as err:
         raise IndexError(f"cannot broadcast indices: {err}") from err
+      index_ndim = len(big_shape)
+      reduce_axes = [first_axis] + [axis + index_ndim - i for i, axis in enumerate(dims[1:], start=1)]
+
+      # advanced getitem path (also used to derive setitem broadcast shape)
+      x_idx = x.reshape(x.shape[:first_axis + 1] + (1,) * index_ndim + x.shape[first_axis + 1:])
+      for step, (index_tensor, axis) in enumerate(zip(tensors, reduce_axes)):
+        prefix = first_axis + (1 if step == 0 else 0)
+        index = index_tensor.reshape((1,) * prefix + big_shape + (1,) * (x_idx.ndim - prefix - index_ndim))
+        x_idx = (x_idx * index._one_hot_along_dim(x_idx.shape[axis], dim=axis)).sum(axis, dtype=x_idx.dtype)
+      if separated: x_idx = x_idx.permute(*range(first_axis, first_axis + index_ndim), *range(0, first_axis), *range(first_axis + index_ndim, x_idx.ndim))
+      if v is None: return x_idx
+
+      # advanced setitem path: reduce repeated writes with last-write-wins
+      vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x_idx.shape, v.shape))
+      masks: list[Tensor] = []
+      for dim, tensor in zip(dims, tensors):
+        i = tensor.reshape((1,) * first_axis + big_shape + (1,) * (x.ndim - first_axis))
+        masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
+      mask: Tensor = functools.reduce(lambda a, b: a.mul(b), masks)
+
+      sum_axis = tuple(d + len(big_shape) for d in dims)
+      x_pre = x
+      if separated:
+        mask = mask.permute(*range(first_axis, first_axis+len(big_shape)), *range(0, first_axis), *range(first_axis+len(big_shape), mask.ndim))
+      for dim in sum_axis: vb = vb.unsqueeze(dim)
+      start = first_axis if not separated else 0
+      if reduce_range := tuple(range(start, start + len(big_shape))):
+        if len(reduce_range) > 1:
+          mask = mask.flatten(reduce_range[0], reduce_range[-1])
+          vb = vb.flatten(reduce_range[0], reduce_range[-1])
+        axis = reduce_range[0]
+        if mask.shape[axis] == 0: vb = x_pre
+        else:
+          mask_i = mask.cast(dtypes.int32)
+          selected = mask & (mask_i.cumsum(axis) == mask_i.sum(axis, keepdim=True))
+          vb = selected.any(axis).where(selected.where(vb, 0).sum(axis, dtype=vb.dtype), x_pre)
+      else: vb = mask.where(vb, x_pre)
     elif v is None: return x  # basic getitem
     # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
     else: vb = v.cast(self.dtype)._broadcast_to(x.shape)
