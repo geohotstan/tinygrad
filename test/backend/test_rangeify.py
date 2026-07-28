@@ -66,6 +66,9 @@ class TestRangeifyAssign(unittest.TestCase):
     self.assertListEqual(lst2, B.permute(1, 0).tolist())
 
 class TestRangeifyEdgeCase(unittest.TestCase):
+  def test_gather_movement_source(self):
+    self.assertEqual(Tensor.arange(6).flip(0).gather(0, Tensor([0, 2, 5])).tolist(), [5, 3, 0])
+
   def test_variable_stack_data(self):
     # a bound-Variable STACK used as data gets ranges from its graph position
     v = Variable("v", 0, 10).bind(3)

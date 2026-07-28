@@ -453,6 +453,7 @@ class Tensor(RandMixin):
 
   def _mop(self, op:Ops, arg) -> Tensor: return self._apply_uop(UOp._mop, op=op, arg=arg)
   def _rop(self, op:Ops, axis:tuple[int, ...]) -> Tensor: return self._apply_uop(UOp._rop, op=op, axis=axis)
+  def _gather(self, dim:int, index:Tensor) -> Tensor: return self._apply_uop(lambda x,i: x._gather(dim, i), index)
 
   def __setitem__(self, indices, v:Tensor|PyConst|list|tuple) -> None:
     if self.dtype in dtypes.weaks: raise RuntimeError("cannot setitem into a weak tensor; it has no storage")

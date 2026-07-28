@@ -37,6 +37,7 @@ pm_fold_moved_after = PatternMatcher([
 
 # movement op on INDEX as a PatternMatcher
 def _mop_index(r:UOp, idx:UOp):
+  if idx.arg is not None: return None
   idxs = idx.src[1:]
   if len(idxs) == len(r.shape):
     return r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), dtype=idx.dtype, arg=idx.arg)

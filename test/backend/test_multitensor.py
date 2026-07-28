@@ -56,6 +56,13 @@ class TestMultiTensor(unittest.TestCase):
       assert lb.shape == (128,)
     (X + X).realize()
 
+  def test_gather(self):
+    expected = np.array([[3, 1], [4, 6], [9, 9], [14, 12], [17, 19], [20, 22]], dtype=np.float32)
+    index = Tensor([[3, 1], [0, 2], [1, 1], [2, 0], [1, 3], [0, 2]], dtype=dtypes.int32).contiguous().realize()
+    for shard_axis in (0, 1):
+      x = Tensor.arange(24).reshape(6, 4).float().contiguous().realize().shard(devices_2, shard_axis)
+      np.testing.assert_equal(x.gather(1, index.shard(devices_2, shard_axis)).to(d0).numpy(), expected)
+
   @unittest.expectedFailure # TODO: fix
   def test_shard_empty(self):
     GlobalCounters.reset()
