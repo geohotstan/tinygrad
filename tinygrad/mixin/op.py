@@ -18,7 +18,6 @@ ReductionStr = Literal["mean", "sum", "none"]
 
 class OpMixin(ElementwiseMixin, ReduceMixin):
   def data(self) -> memoryview: raise NotImplementedError("data requires Tensor realization to host memory")
-  def _gather(self, dim:int, index:Self) -> Self: raise NotImplementedError
 
   def item(self) -> PyConst:
     """
@@ -1010,11 +1009,11 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     """
     if index.device is not None and self.device is not None and index.device != self.device:
       raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
-    if not dtypes.is_int(index.dtype): raise RuntimeError(f"gather expects int index tensor, getting {index.dtype}")
     if index.ndim != self.ndim: raise RuntimeError(f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}")
     dim = self._resolve_dim(dim)
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
-    return self._gather(dim, index)
+    x = self.shrink_to(tuple(i if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
+    return (index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).where(x, 0)).sum(-1, dtype=self.dtype)
 
   def interpolate(self, size:tuple[int, ...], mode:str="linear", align_corners:bool=False) -> Self:
     """

@@ -251,13 +251,6 @@ class TestTensorUOpRand(unittest.TestCase):
 class TestTensorUOpGather(unittest.TestCase):
   def _check(self, t, dim, idx):
     self.assertIs(t.gather(dim, idx).uop, t.uop.gather(dim, idx.uop))
-  def test_gather_is_index(self):
-    t = Tensor(UOp.empty((3, 4), dtype=dtypes.float32))
-    idx = Tensor(UOp.empty((3, 2), dtype=dtypes.int32))
-    out = t.gather(1, idx)
-    self.assertEqual((out.uop.op, out.uop.arg, out.shape), (Ops.INDEX, 1, (3, 2)))
-    self.assertEqual(out.uop.src, (t.uop, idx.uop))
-    self.assertNotIn(Ops.REDUCE, {x.op for x in out.uop.toposort()})
   def test_gather_1d(self):  self._check(_t(5), 0, Tensor([2, 1, 0, 1, 2], dtype=dtypes.int32))
   def test_gather_dim0(self): self._check(_t(3, 4), 0, Tensor([[0, 1, 2, 0], [1, 2, 0, 1], [2, 0, 1, 2]], dtype=dtypes.int32))
   def test_gather_dim1(self): self._check(_t(3, 4), 1, Tensor([[0, 1, 2, 3], [1, 2, 3, 0], [2, 3, 0, 1]], dtype=dtypes.int32))

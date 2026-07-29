@@ -32,11 +32,6 @@ class TestTensorGradient(unittest.TestCase):
     self.assertListEqual(dx.tolist(), [[4.0], [4.0], [4.0]])
     self.assertListEqual(dy.tolist(), [[3.0, 3.0, 3.0, 3.0]])
 
-  def test_gather_repeated_index_gradient(self):
-    x = Tensor.arange(8).float()
-    dx = x.gather(0, Tensor([2, 2, 5])).sum().gradient(x)[0]
-    self.assertListEqual(dx.tolist(), [0.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-
   def test_non_scalar_output(self):
     x = Tensor([1.0, 2.0, 3.0])
     z = x * x

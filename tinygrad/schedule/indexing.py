@@ -97,16 +97,6 @@ def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
   if x.op in {Ops.STAGE, Ops.INDEX}: return None
   return x.replace(src=tuple(create_bufferize_and_index_srcs(ctx, x)))
 
-def lower_gather(x:UOp):
-  return x.src[0] if isinstance(x.arg, int) else None
-
-def lower_direct_gather(ctx:IndexingContext, x:UOp):
-  if not isinstance(x.arg, int) or x not in ctx.range_map or \
-     x.src[0].op not in {Ops.PARAM, Ops.BUFFER, Ops.AFTER, Ops.SLICE, Ops.MSELECT, Ops.MSTACK}: return None
-  idx = UOp.const(dtypes.weakint, 0)
-  for size, rng in zip(x.src[0].shape, ctx.range_map[x][0]): idx = idx*size + rng
-  return x.src[0].flatten().index(idx)
-
 def convert_pad_to_where_to_keep_behavior_local(ctx:IndexingContext, x:UOp):
   if x not in ctx.range_map: return None
   bx = create_bufferize_and_index_based_on_ranges(ctx, x)
@@ -134,7 +124,6 @@ def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
 
 pm_apply_rangeify = PatternMatcher([
-  (UPat(Ops.INDEX, name="x"), lower_direct_gather),
   # REDUCE(op, axis) -> REDUCE(op) with ranges
   (UPat(Ops.REDUCE, name="x"), convert_reduce_to_reduce_with_ranges),
   # PAD -> WHERE
@@ -145,11 +134,6 @@ pm_apply_rangeify = PatternMatcher([
   (UPat(GroupOp.All, name="x"), create_bufferize_and_index_based_on_ranges),
   # remove movement op
   (UPat(GroupOp.Movement, name="x"), remove_movement_op_after_rangeify),
-])
-
-pm_lower_gather = PatternMatcher([
-  # rangeify has already evaluated data at the indirect coordinate and index at the output coordinate
-  (UPat(Ops.INDEX, name="x"), lower_gather),
 ])
 
 pm_fix_deviceless = PatternMatcher([
@@ -298,11 +282,6 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
 
     rngs = out_rngs  # rngs is the input ranges  # pylint: disable=possibly-used-before-assignment
 
-    # tensor-level gather: data sees the index value on `dim`, while index sees the output ranges above.
-    if x.op is Ops.INDEX and isinstance(x.arg, int):
-      index = x.src[1].index(*out_rngs)
-      rngs = out_rngs[:x.arg] + (index.valid((index >= 0) & (index < x.src[0].shape[x.arg])),) + out_rngs[x.arg+1:]
-
     # apply movement ops
     if x.op in GroupOp.Movement: rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, rngs)
     # STACK: the leading range selects the src, srcs get the trailing ranges
@@ -331,7 +310,6 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> tuple[UOp, IndexingContext]:
   # NOTE: SPEC=3 is broken here with shape
   with Context(SPEC=min(SPEC.value, 2)):
     tsink = graph_rewrite(tsink, pm_apply_rangeify, ctx=rctx, bottom_up=True, name="apply rangeify")
-    tsink = graph_rewrite(tsink, pm_lower_gather, name="lower gather")
   # if a deviceless value must materialize, place it on the sink device
   tsink = graph_rewrite(tsink, pm_fix_deviceless, ctx=tsink.device, name="add device to deviceless")
   return tsink, rctx

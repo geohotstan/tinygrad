@@ -354,10 +354,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         return inner_shape
 
       case Ops.INDEX:
-        # tensor-level gather: INDEX(data, index, arg=dim) has the shape of the index tensor.
-        if isinstance(self.arg, int):
-          assert len(self.src) == 2 and 0 <= self.arg < len(self.src[0].shape)
-          return self.src[1].shape
         shp:list[sint] = []
         for s in self.src[1:]: shp.extend(list(s.shape))
         return tuple(shp) + self.src[0].shape[len(self.src[1:]):]
@@ -561,10 +557,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
     new_srcs: list[UOp] = [UOp.const(dtypes.weakint, x) if isinstance(x, int) else x for x in srcs if x is not None]
     if len(new_srcs) == 1 and new_srcs[0].op is Ops.CONST and self.op is Ops.STACK: return self.src[new_srcs[0].arg]
     return UOp(Ops.INDEX, src=(self,)+tuple(new_srcs), **kwargs)
-  def _gather(self, dim:int, index:UOp) -> UOp:
-    idx = index if index.op in {Ops.COPY, Ops.MULTI, Ops.MSTACK, Ops.MSELECT} or index.has_buffer_identity(after_ok=True) \
-      else index.alu(Ops.CONTIGUOUS)
-    return UOp(Ops.INDEX, src=(self, idx), arg=dim)
   def __getitem__(self, idx):
     # buffers index into INDEX UOps (scalar lookup); everything else uses the shared mixin view path
     if self.addrspace in (None, AddrSpace.ALU) or self.device is not None: return super(UOp, self).__getitem__(idx)
@@ -688,9 +680,6 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
       in_tuple = self.src[0].src[0] if self.src[0].op is Ops.FUNCTION else self.src[0]
       return in_tuple.src[self.arg].axis if in_tuple.op is Ops.TUPLE else None
     if self.op is Ops.PARAM: return self.arg.axis
-    if self.op is Ops.INDEX and isinstance(self.arg, int):
-      data_axis, index_axis = self.src[0].axis, self.src[1].axis
-      return None if data_axis == self.arg else data_axis if data_axis is not None else index_axis
     # NOTE: they all have to share an axis, we always choose [-1]. src axes are right-aligned into the output shape
     if self.op in GroupOp.ALU.union({Ops.STACK}):
       return axes[-1] if (axes := dedup([x.axis+len(self.shape)-len(x.shape) for x in self.src if x.axis is not None])) else None

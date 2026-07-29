@@ -70,32 +70,6 @@ def alu_multi(root:UOp):
   srcs = shard_srcs(root.src, axis)
   return srcs[0].alu(root.op, *srcs[1:]).multi(axis)
 
-def gather_multi(root:UOp, data:UOp, index:UOp):
-  if not isinstance(root.arg, int) or (data.op is not Ops.MULTI and index.op is not Ops.MULTI): return None
-  data_axis, index_axis, dim = data.axis, index.axis, root.arg
-  # Indices on the data's shard axis can address any shard, so replicate the full data first.
-  if data_axis == dim:
-    data = copy_multi(data, data.device)
-    if index.op is Ops.MULTI: index = copy_multi(index, index.device)
-    return root.replace(src=(data, index))
-  out_axis = data_axis if data_axis is not None else index_axis
-  if out_axis is None: return root.replace(src=(data, index))
-  devices = data.device if isinstance(data.device, tuple) else index.device
-  assert isinstance(devices, tuple)
-  dcount = len(devices)
-  def local(x:UOp, shrink_data:bool=False) -> UOp:
-    if x.op is Ops.MULTI and x.axis == out_axis and (not shrink_data or x.shape[out_axis] == index.shape[out_axis]): return x.src[0]
-    full = x if x.axis is None else copy_multi(x, x.device)
-    if shrink_data:
-      full = full.shrink(tuple((0, index.shape[d] if d != dim else full.shape[d]) for d in range(full.ndim)))
-    return full._shard(out_axis, dcount)
-  if out_axis == dim:
-    assert index.op is Ops.MULTI and index.axis == out_axis
-    local_data, local_index = data, index.src[0]
-  else:
-    local_data, local_index = local(data, shrink_data=True), local(index)
-  return UOp(Ops.INDEX, src=(local_data, local_index), arg=dim).multi(out_axis)
-
 def reduce_multi(root:UOp, multi:UOp):
   op, num_axes = root.arg
   if multi.axis is not None and multi.axis < num_axes:
@@ -181,7 +155,6 @@ def param_to_multi(p:UOp):
 multi_pm = PatternMatcher([
   (UPat(Ops.PARAM, name="p"), param_to_multi),
   (UPat(GroupOp.ALU, name="root", custom_early_reject=set([Ops.MULTI])), alu_multi),
-  (UPat(Ops.INDEX, src=(UPat(name="data"), UPat(name="index")), name="root"), gather_multi),
   (UPat(Ops.REDUCE, src=(UPat(Ops.MULTI, name="multi"), ), name="root"), reduce_multi),
   (UPat(Ops.RESHAPE, src=(UPat(Ops.MULTI, name="multi"), UPat()), name="root"), reshape_multi),
   (UPat(Ops.EXPAND, src=(UPat(Ops.MULTI, name="multi"), UPat()), name="root"), expand_multi),
