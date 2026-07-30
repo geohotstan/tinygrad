@@ -19,6 +19,22 @@ ReductionStr = Literal["mean", "sum", "none"]
 class OpMixin(ElementwiseMixin, ReduceMixin):
   def data(self) -> memoryview: raise NotImplementedError("data requires Tensor realization to host memory")
 
+  def _index(self, *indices:Self, store:bool=False, unique:bool=False) -> Self:
+    if not indices: return self.reshape((1,))._index(type(self).const(dtypes.weakint, 0), store=store, unique=True)
+    idxs, shape = [x._uop.get_idx() for x in indices], _broadcast_shape(*(x.shape for x in indices))
+    valid = type(idxs[0]).const(dtypes.bool, True).uprod(*(x._uop.get_valid()._broadcast_to(shape) & (idx >= 0) & (idx < self.shape[d])
+                                                        for d,(x,idx) in enumerate(zip(indices, idxs))))
+    if store and not unique and isinstance(n:=prod(shape), int) and n:
+      flats, pos, flat_valid = [x.flatten() for x in idxs], type(idxs[0]).arange(n), valid.flatten()
+      same = type(idxs[0]).const(dtypes.bool, True).uprod(*(x[:, None].eq(x) for x in flats)) & flat_valid[:, None] & flat_valid
+      valid = (valid & ~(same & (pos[:, None] < pos)).any(1).reshape(shape))
+    data = self._uop if store or self._uop.op is Ops.CONTIGUOUS or self._uop.has_buffer_identity(after_ok=True) else self._uop.alu(Ops.CONTIGUOUS)
+    return self._wrap_uop(data.index(*(idx.valid(valid) for idx in idxs)))
+
+  def _axis_indices(self, dim:int, index:Self) -> tuple[Self, ...]:
+    return tuple(index if d == dim else type(self).arange(index.shape[d], dtype=index.dtype)
+                 .reshape((1,)*d+(index.shape[d],)+(1,)*(self.ndim-d-1)).expand(index.shape) for d in range(self.ndim))
+
   def item(self) -> PyConst:
     """
     Returns the value of this tensor as a standard Python number.
@@ -64,17 +80,13 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       ```
 
     NOTE: Out-of-bounds indexing results in a value of `0`.
-    ```python exec="true" source="above" session="tensor" result="python"
-    t = Tensor([1, 2, 3])
-    print(t[Tensor([4, 3, 2])].numpy())
-    ```
     """
-    return self._getitem(indices)
+    view, coords, advanced = self._resolve_indices(indices)
+    return self._index(*coords) if advanced else view
 
-  def _getitem(self, indices, v=None) -> Self:
+  def _resolve_indices(self, indices, direct:bool=False) -> tuple[Self, tuple[Self, ...], bool]:
     from tinygrad.uop.ops import UOp
-    def is_adv(i): return isinstance(i,(list,tuple)) or (isinstance(i,type(self)) and (not isinstance(i,UOp) or i.shape != ()))
-    # wrap single index into a list
+    def is_adv(i): return isinstance(i,(list,tuple)) or isinstance(i,type(self))
     if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)): indices = [indices]
     indices_parsed, dim = [], 0
     for index in self._normalize_indices(list(indices)):
@@ -83,7 +95,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       if isinstance(index,(list,tuple)):
         flat = fully_flatten(index)
         inferred = dtypes.bool if (flat and all(isinstance(s,bool) for s in flat)) else \
-          (dtypes.default_int if flat and all_int(flat) else dtypes.default_float)
+          (dtypes.default_int if not flat or all_int(flat) else dtypes.default_float)
         if not dtypes.is_int(inferred): raise IndexError(f"{index=} contains non-int element")
         index = self._wrap_uop(UOp._frompy([i+size if i<0 else i for i in flat], inferred, self.device)).reshape(get_shape(index))
       elif is_adv(index):
@@ -97,69 +109,38 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       if index is not None: dim += 1
 
     # apply view ops then dim injection (None) and collapse (int)
-    x = self._apply_view_ops(mops := [p for p in indices_parsed if p["index"] is not None])
+    x = self._apply_view_ops([p for p in indices_parsed if p["index"] is not None])
     x_dims = [p for p in indices_parsed if not p["collapse_dim"]]
     x = x.reshape(tuple(p["size"] for p in x_dims))
 
-    # tensor indexing
-    if tops := [(d, p) for d, p in enumerate(x_dims) if is_adv(p['index'])]:
-      dims, tensors, masks = [d for d, _ in tops], [p['index'] for _, p in tops], []
+    # map every output element back to coordinates in the original tensor
+    tops = [(d, p) for d, p in enumerate(x_dims) if is_adv(p['index'])]
+    if not tops and not direct: return x, (), False
+    def align(t:Self, axis:int, out_shape:tuple) -> Self: return t.reshape((1,)*axis+t.shape+(1,)*(len(out_shape)-axis-t.ndim)).expand(out_shape)
+    if tops:
+      dims, tensors = [d for d, _ in tops], [p['index'] for _, p in tops]
       big_shape = _broadcast_shape(*(t.shape for t in tensors))
-
-      # consecutive tensor indices with int shapes: use linear indexing instead of one-hot masks
+      basic_dims = [d for d in range(x.ndim) if d not in dims]
       consecutive = dims == list(range(dims[0], dims[0] + len(dims)))
-      if v is None and len(dims) > 1 and consecutive and all_int(ishp := tuple(x.shape[d] for d in dims)):
-        strides = tuple(prod(ishp[i+1:]) for i in range(len(dims)))
-        linear_idx = type(self).usum(*[t * s for t, s in zip(tensors, strides)])
-        valid = type(self).uprod(*[(t >= 0) & (t < s) for t, s in zip(tensors, ishp)])
-        pre, post = x.shape[:dims[0]], x.shape[dims[-1]+1:]
-        x = x.reshape(pre + (prod(ishp),) + post)[tuple([slice(None)] * len(pre)) + (valid.where(linear_idx, 0),)]
-        return valid.reshape((1,) * len(pre) + big_shape + (1,) * len(post)).where(x, 0)
+      out_shape = x.shape[:dims[0]]+big_shape+x.shape[dims[-1]+1:] if consecutive else big_shape+tuple(x.shape[d] for d in basic_dims)
+      basic_out_axes = {d:(d if d < dims[0] else d-len(dims)+len(big_shape)) if consecutive else len(big_shape)+i
+                        for i,d in enumerate(basic_dims)}
+      if any(x.shape[d] == 0 and resolve(t.numel() > 0) for d,t in zip(dims, tensors)):
+        raise IndexError("cannot index a zero-sized dimension with a nonempty tensor")
+      advanced:dict[int, Self] = {d:align(t._broadcast_to(big_shape), dims[0] if consecutive else 0, out_shape) for d,t in zip(dims, tensors)}
+    else: out_shape, basic_out_axes, advanced = x.shape, {d:d for d in range(x.ndim)}, {}
 
-      pre_reduce_shape = x.shape[:dims[0]] + big_shape + x.shape[dims[0]:]
-
-      # create index masks
-      for dim, tensor in zip(dims, tensors):
-        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
-        except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
-        masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
-
-      # reduce masks to 1 mask
-      mask = type(self).uprod(*masks)
-
-      # inject 1's for the extra dims added in create masks
-      reshape_arg = x.shape[:dims[0]] + (1,) * len(big_shape) + x.shape[dims[0]:]
-      # sum reduce the extra dims introduced in create masks
-      x_pre = x  # save collapsed shape for advanced setitem
-      x = (mask.where(x.reshape(reshape_arg), 0)).sum(sum_axis:=tuple(d + len(big_shape) for d in dims), dtype=x.dtype)
-
-      # special permute case
-      if (permuted := dims[0] != 0 and len(dims) != 1 and tuple(dims) != tuple(range(dims[0], dims[-1]+1))):
-        mask, x = (y.permute(*range(dims[0], dims[0]+len(big_shape)), *range(0, dims[0]), *range(dims[0]+len(big_shape), y.ndim)) for y in (mask, x))
-
-      if v is None: return x  # advanced getitem
-      # advanced setitem: resolve tensor dims in collapsed space, then fall through to basic setitem path
-      vb = v.cast(self.dtype)._broadcast_to(_broadcast_shape(x.shape, v.shape))
-      for dim in sum_axis: vb = vb.unsqueeze(dim)  # add back reduced dims from sum
-      start = dims[0] if not permuted else 0
-      vb = x_pre._masked_merge(vb, mask, tuple(range(start, start + len(big_shape))))
-    elif v is None: return x  # basic getitem
-    # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
-    else: vb = v.cast(self.dtype)._broadcast_to(x.shape)
-    vb = vb.reshape(tuple(1 if p['collapse_dim'] else p['size'] for p in indices_parsed if p['index'] is not None))
-    per_dim = []
-    for d, m in enumerate(mops):
-      (s, e), st = m['boundary'], abs(m['stride'])
-      if st != 1 and vb.shape[d] > 1:  # un-stride: interleave with zeros
-        vb = vb.unsqueeze(d+1)
-        vb = vb.pad_to(tuple(st if j == d+1 else None for j in range(vb.ndim)))
-        vb = vb.reshape(vb.shape[:d] + (vb.shape[d]*vb.shape[d+1],) + vb.shape[d+2:])
-        vb = vb.shrink_to(tuple(e-s if j == d else None for j in range(self.ndim)))
-      idx = type(self).arange(self.shape[d]).reshape([1]*d + [self.shape[d]] + [1]*(self.ndim - d - 1))
-      per_dim.append((idx >= s) & (idx < e) & (((e-1-idx) if m['stride'] < 0 else (idx-s)) % st == 0))
-    vb = vb.flip(tuple(d for d, m in enumerate(mops) if m['stride'] < 0))
-    vb = vb.pad(tuple((m['boundary'][0], self.shape[d] - m['boundary'][1]) for d, m in enumerate(mops)))
-    return (type(self).uprod(*per_dim) if per_dim else type(self).const(dtypes.bool, True)).where(vb, self)
+    xcoords = [advanced[d] if d in advanced else align(type(self).arange(x.shape[d]), basic_out_axes[d], out_shape) for d in range(x.ndim)]
+    coords, xdim = [], 0
+    for p in indices_parsed:
+      if p["collapse_dim"]: coord = type(self).const(dtypes.weakint, p["boundary"][0])
+      else: coord, xdim = xcoords[xdim], xdim+1
+      if p["index"] is None: continue
+      if not is_adv(p["index"]) and not p["collapse_dim"]:
+        coord = (p["boundary"][1]-1) - coord*abs(p["stride"]) if p["stride"] < 0 else p["boundary"][0] + coord*p["stride"]
+      coords.append(coord)
+    if out_shape and coords and not any(c.shape for c in coords): coords[0] = coords[0]._broadcast_to(out_shape)
+    return x, tuple(coords), bool(tops)
 
   @classmethod
   def arange(cls, start, stop=None, step=1, dtype:DTypeLike|None=None) -> Self:
@@ -1010,10 +991,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if index.device is not None and self.device is not None and index.device != self.device:
       raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
     if index.ndim != self.ndim: raise RuntimeError(f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}")
+    if not dtypes.is_int(index.dtype): raise RuntimeError(f"gather index dtype must be int, got {index.dtype}")
     dim = self._resolve_dim(dim)
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
-    x = self.shrink_to(tuple(i if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
-    return (index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).where(x, 0)).sum(-1, dtype=self.dtype)
+    return self._index(*self._axis_indices(dim, index))
 
   def interpolate(self, size:tuple[int, ...], mode:str="linear", align_corners:bool=False) -> Self:
     """
@@ -1047,23 +1028,18 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         x = x.gather(i, index)
     return x.cast(self.dtype)
 
-  def _pre_scatter(self, dim:int, index:Self, src:Self) -> tuple[Self, Self]:
+  def _pre_scatter(self, dim:int, index:Self, src:Self) -> tuple[int, Self]:
     if index.device is not None and self.device is not None and index.device != self.device:
       raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
     if src.device is not None and self.device is not None and src.device != self.device:
       raise RuntimeError(f"expected src and self on the same device, {src.device=}, {self.device=}")
+    if not dtypes.is_int(index.dtype): raise RuntimeError(f"scatter index dtype must be int, got {index.dtype}")
     dim = self._resolve_dim(dim)
     assert index.ndim == self.ndim == src.ndim, f"self.ndim, index.ndim and src.ndim must all equal, {self.ndim=} {index.ndim=} {src.ndim=}"
     assert all((d == dim or self_ >= index_) and src_ >= index_ for d,(self_,index_,src_) in enumerate(zip(self.shape, index.shape, src.shape))), \
       f"All dimensions of {index.shape=} should be <= to all dimensions of {src.shape=} and all dimensions except dimension {dim} of {self.shape=}"
     if self.dtype != src.dtype: raise RuntimeError(f"expect {self.dtype=} to be equal to {src.dtype=}")
-    # shrink src to index shape to shrink away the unused values
-    src = src.shrink_to(index.shape)
-    # prepare src and mask for reduce with respect to dim
-    src = src.unsqueeze(-1).expand(*src.shape, self.shape[dim]).transpose(-1, dim)
-    mask = index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).transpose(-1, dim)
-    # pad src and mask to self.shape so that reduce can be done with padded values as no-ops
-    return src.pad_to(*self.shape, None), mask.pad_to(*self.shape, None)
+    return dim, src.shrink_to(index.shape)
 
   def scatter_reduce(self, dim:int, index:Self, src:Self, reduce:Literal["sum", "prod", "mean", "amax", "amin"],
                      include_self:bool=True) -> Self:
@@ -1095,7 +1071,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(Tensor([[-10, 20, 0, 5, 10]], dtype=src.dtype).scatter_reduce(0, index, src, reduce='amin').numpy())
     ```
     """
-    src, mask = self._pre_scatter(dim, index, src)
+    dim, src = self._pre_scatter(dim, index, src)
+    src = src.unsqueeze(-1).expand(*src.shape, self.shape[dim]).transpose(-1, dim).pad_to(*self.shape, None)
+    mask = index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).transpose(-1, dim).pad_to(*self.shape, None)
     def _inv_mask(a:Self|PyConst, b:Self|PyConst) -> Self: return mask.any(-1).logical_not().where(a, b)
     if reduce == "sum": return mask.where(src, 0).sum(-1).add(self if include_self else _inv_mask(self, 0))
     if reduce == "prod": return mask.where(src, 1).prod(-1).mul(self if include_self else _inv_mask(self, 1))
@@ -1137,17 +1115,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     elif reduce: raise TypeError("non-scalar src is not supported with reduce arg. use scatter_reduce")
     if reduce == "add": return self.scatter_reduce(dim, index, src, "sum", include_self=True)
     if reduce == "multiply": return self.scatter_reduce(dim, index, src, "prod", include_self=True)
-    src, mask = self._pre_scatter(dim, index, src)
-    return self._masked_merge(src, mask, (-1,))
-
-  def _masked_merge(self, values:Self, mask:Self, axes:tuple[int, ...]) -> Self:
-    # reduce such that if mask contains repeated indices the last one remains
-    for dim in reversed(axes):
-      mask, values = functools.reduce(lambda x,y: (x[0]|y[0], y[0].where(y[1], x[1])), zip(mask.split(1, dim), values.split(1, dim)))
-    # remove extra dims from reduce
-    for dim in reversed(axes): mask, values = mask.squeeze(dim), values.squeeze(dim)
-    # select from values for each True element in mask else select from self
-    return mask.where(values, self)
+    dim, src = self._pre_scatter(dim, index, src)
+    out = self._wrap_uop(self._uop.alu(Ops.CONTIGUOUS))
+    target = out._index(*self._axis_indices(dim, index), store=True)
+    return self._wrap_uop(out._uop.after(target._uop.store(src._uop)))
 
   def masked_select(self, mask, size:int|None=None, fill_value:ConstType=0):
     """

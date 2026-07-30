@@ -382,8 +382,6 @@ class TestIndexing(unittest.TestCase):
     result = x[rows[:, None], columns]
     numpy_testing_assert_equal_helper(result.numpy().tolist(), [[0, 2], [9, 11]])
 
-  # TODO jax supports empty tensor indexing
-  @unittest.skip("empty tensor indexing not supported")
   def test_empty_index(self):
     x = Tensor.arange(0, 12).reshape(4, 3)
     idx = Tensor([], dtype=dtypes.int64)
@@ -401,8 +399,6 @@ class TestIndexing(unittest.TestCase):
     numpy_testing_assert_equal_helper(x, y)
     '''
 
-  # TODO jax supports empty tensor indexing
-  @unittest.skip("empty tensor indexing not supported")
   def test_empty_ndim_index(self):
     x = Tensor.randn(5)
     numpy_testing_assert_equal_helper(Tensor.empty(0, 2), x[Tensor.empty(0, 2, dtype=dtypes.int64)])
@@ -716,8 +712,6 @@ class TestNumpy(unittest.TestCase):
     numpy_testing_assert_equal_helper(a[()], a)
     #self.assertEqual(data_ptr(a[()]), data_ptr(a))
 
-  # TODO jax supports empty tensor indexing
-  @unittest.skip("empty tensor indexing not supported")
   def test_empty_fancy_index(self):
     # Empty list index creates an empty array
     a = Tensor([1, 2, 3])

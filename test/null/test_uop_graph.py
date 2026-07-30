@@ -648,6 +648,10 @@ class TestUOpGetItem(unittest.TestCase):
     p = self._placeholder((64, 64))
     result = p[0]
     self.assertEqual(result.shape, (64,))
+  def test_shaped_indices_broadcast(self):
+    p = self._placeholder((4, 5, 6))
+    self.assertEqual([p.index(UOp.const(dtypes.int, 0, shape=a), UOp.const(dtypes.int, 0, shape=b)).shape
+                      for a,b in (((2,), (2,)), ((2,1), (3,)))], [(2,6), (2,3,6)])
 
   # ellipsis
   def test_ellipsis_all_slices(self):

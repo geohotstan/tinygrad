@@ -11,6 +11,8 @@ ALWAYS_CONTIGUOUS: set[Ops] = {Ops.CONTIGUOUS, Ops.AFTER, Ops.BUFFER, Ops.SLICE,
                       Ops.CONST, Ops.BIND, Ops.MSELECT, Ops.MSTACK, Ops.PARAM,
                       Ops.LOAD, Ops.CALL, Ops.FUNCTION}
 
+def is_shaped_index(op:Ops, src:tuple[UOp, ...]) -> bool: return op is Ops.INDEX and any(x.shape for x in src[1:])
+
 def realize(ctx:dict[UOp, None], tr:UOp) -> None: ctx[tr] = None
 
 def realize_srcs(ctx:dict[UOp, None], rb:UOp) -> None:
@@ -63,18 +65,19 @@ def broadcast_rngs(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
 # TODO: srcs contain (real data srcs, something else, ranges) and the boundary is confusing. see range_start
 def data_srcs(op:Ops, src:tuple[UOp, ...]) -> tuple[UOp, ...]:
   if op in {Ops.PARAM, Ops.BUFFER, Ops.RANGE, Ops.SPECIAL, Ops.BIND}: return ()
+  if is_shaped_index(op, src): return src[1:]
   if op in GroupOp.Movement|{Ops.INDEX, Ops.SLICE, Ops.STAGE, Ops.REDUCE, Ops.AFTER, Ops.END}: return src[:1]
   return src
 
 def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
   new_srcs = []
   # shape/bound/index args that are not data src should not be indexed
-  data_src_count = len(data_srcs(x.op, x.src))
-  for i, s in enumerate(x.src):
+  data_sources = data_srcs(x.op, x.src)
+  for s in x.src:
     new_src = s
     src_rngs = broadcast_rngs(x, s, ctx.range_map[x][0]) if x in ctx.range_map else ()
     if s.op in {Ops.PARAM, Ops.BUFFER, Ops.SLICE, Ops.MSTACK, Ops.MSELECT, Ops.AFTER}:
-      if x in ctx.range_map and i < data_src_count: new_src = new_src.index(*src_rngs)
+      if x in ctx.range_map and s in data_sources: new_src = new_src.index(*src_rngs)
     elif s in ctx.realize_map:
       realized_ranges = ctx.realize_map[s]
       assert isinstance(realized_ranges, list), "realize map must contain range list"
@@ -89,13 +92,19 @@ def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
         opts = BufferizeOpts(device=s.device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
                BufferizeOpts(device=s.device, addrspace=AddrSpace.LOCAL, removable=removable)
         new_src = UOp(Ops.STAGE, src=(new_src,)+closed_ranges, arg=opts)
-        if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
+        if x in ctx.range_map and s in data_sources: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
     new_srcs.append(new_src)
   return new_srcs
 
 def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
   if x.op in {Ops.STAGE, Ops.INDEX}: return None
   return x.replace(src=tuple(create_bufferize_and_index_srcs(ctx, x)))
+
+def convert_shaped_index(ctx:IndexingContext, x:UOp) -> UOp|None:
+  if not is_shaped_index(x.op, x.src) or x not in ctx.range_map: return None
+  data, *indices = create_bufferize_and_index_srcs(ctx, x)
+  return data.index(*(index.load() if index.op in {Ops.INDEX, Ops.SHRINK} and index.src[0].has_buffer_identity(after_ok=True) else index
+                      for index in indices))
 
 def convert_pad_to_where_to_keep_behavior_local(ctx:IndexingContext, x:UOp):
   if x not in ctx.range_map: return None
@@ -124,6 +133,7 @@ def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
 
 pm_apply_rangeify = PatternMatcher([
+  (UPat(Ops.INDEX, name="x"), convert_shaped_index),
   # REDUCE(op, axis) -> REDUCE(op) with ranges
   (UPat(Ops.REDUCE, name="x"), convert_reduce_to_reduce_with_ranges),
   # PAD -> WHERE
