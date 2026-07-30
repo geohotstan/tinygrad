@@ -2,12 +2,28 @@ from typing import cast
 import math, dataclasses
 from tinygrad.uop.ops import UOp, PatternMatcher, UPat, Ops, all_metadata, broadcast_axes
 from tinygrad.helpers import argsort
-from tinygrad.dtype import sum_acc_dtype
+from tinygrad.dtype import dtypes, sum_acc_dtype
 
 def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
   if op == Ops.ADD: return (ctx._broadcast_to(ret.src[0].shape),)
   if op == Ops.MAX: return (((mask:=ret.src[0].eq(ret).cast(ctx.dtype))/mask._rop(Ops.ADD, tuple(range(ret.arg[1])))) * ctx,)
   if op == Ops.MUL: return (ctx * ret / ret.src[0],)
+
+def index_store_gradient(ctx:UOp, ret:UOp):
+  data, store = ret.src
+  out = ctx.clone(device=data.device)
+  indices, source = store.src[0].src[1:], ctx if ctx.has_buffer_identity(after_ok=True) else ctx.alu(Ops.CONTIGUOUS)
+  return out.after(out.index(*indices).store(0)), source.index(*indices)
+
+def index_gradient(ctx:UOp, ret:UOp):
+  data, *indices = ret.src
+  if isinstance(n:=ctx.numel(), int) and n == 0: return (data.const_like(0),) + (None,)*len(indices)
+  idxs, valid, pos = [x.get_idx().flatten() for x in indices], UOp.const(dtypes.bool, True).uprod(
+    *(x.get_valid().flatten() for x in indices)), UOp.arange(n)
+  same = UOp.const(dtypes.bool, True).uprod(*(x[:, None].eq(x) for x in idxs)) & valid[:, None] & valid
+  last = valid & ~(same & (pos[:, None] < pos)).any(1)
+  out = data.const_like(0).clone(device=data.device)
+  return (out.after(out.index(*(x.valid(last) for x in idxs)).store(same.where(ctx.flatten(), 0).sum(1, dtype=ctx.dtype))),) + (None,)*len(indices)
 
 def _compact_params(body:UOp, all_args:tuple[UOp, ...]) -> tuple[UOp, tuple[UOp, ...]]:
   """Remove unused PARAMs from body and return compacted (body, args)."""
@@ -59,6 +75,7 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.MUL, name="ret"), lambda ctx, ret: (ret.src[1]*ctx, ret.src[0]*ctx)),
   (UPat(Ops.WHERE, name="ret"), lambda ctx, ret: (None, ret.src[0].where(ctx, ctx.const_like(0)), ret.src[0].where(ctx.const_like(0), ctx))),
   (UPat(Ops.REDUCE, name="ret"), lambda ctx, ret: reduce_gradient(ctx, ret, ret.arg[0])),
+  (UPat(Ops.INDEX, name="ret"), lambda ctx,ret: index_gradient(ctx, ret)),
   (UPat(Ops.CONTIGUOUS), lambda ctx: (ctx,)),
   (UPat(Ops.CONTIGUOUS_BACKWARD), lambda ctx: (ctx.contiguous(),)),
   (UPat(Ops.RESHAPE, name="ret"), lambda ctx, ret: (ctx.reshape(ret.src[0].shape), None)),
@@ -73,6 +90,7 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.TUPLE), lambda ctx: ctx.src),
   (UPat(Ops.AFTER, src=(UPat.var("d"), UPat(Ops.CALL, name="k"))), lambda ctx, d, k:
     (ctx, UOp.maketuple(*(ctx if i == k.src.index(d)-1 else UOp(Ops.NOOP) for i in range(len(k.src)-1))))),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(Ops.INDEX), UPat()))), name="ret"), lambda ctx,ret: index_store_gradient(ctx, ret)),
   # clone/assign gradient passes through to val
   (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE))), lambda ctx: (None, ctx)),
   (UPat(Ops.STORE, src=(UPat(), UPat())), lambda ctx: (None, ctx)),

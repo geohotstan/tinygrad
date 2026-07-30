@@ -354,9 +354,8 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         return inner_shape
 
       case Ops.INDEX:
-        shp:list[sint] = []
-        for s in self.src[1:]: shp.extend(list(s.shape))
-        return tuple(shp) + self.src[0].shape[len(self.src[1:]):]
+        shaped = [s.shape for s in self.src[1:] if s.shape]
+        return (_broadcast_shape(*shaped) if shaped else ()) + self.src[0].shape[len(self.src)-1:]
 
       case Ops.STACK:
         if len(self.src) == 0: return ()

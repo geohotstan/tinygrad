@@ -136,6 +136,9 @@ class TestTensorUOpGetitem(unittest.TestCase):
   def test_adv_none_then_idx(self):    self._check_adv(_t(3,4), (None, _ti([2,0,1])))
   def test_adv_ellipsis_then_idx(self):self._check_adv(_t(2,3,4), (Ellipsis, _ti([2,0,1])))
   def test_adv_idx_slice_mix(self):    self._check_adv(_t(4,5,6), (_ti([1,3]), slice(1,4), _ti([2,0])))
+  def test_adv_preserves_coordinate_tuple(self):
+    self.assertEqual((out:=_t(4,5)[_ti([0,3]), _ti([1,2])]).uop.op, Ops.INDEX)
+    self.assertEqual([x.shape for x in out.uop.src], [(4,5), (2,), (2,)])
 
   # bool index is unsupported
   def test_adv_bool_index_rejected(self):
