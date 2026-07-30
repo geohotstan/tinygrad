@@ -9,13 +9,11 @@ def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
   if op == Ops.MAX: return (((mask:=ret.src[0].eq(ret).cast(ctx.dtype))/mask._rop(Ops.ADD, tuple(range(ret.arg[1])))) * ctx,)
   if op == Ops.MUL: return (ctx * ret / ret.src[0],)
 
-def after_store_gradient(ctx:UOp, ret:UOp):
+def index_store_gradient(ctx:UOp, ret:UOp):
   data, store = ret.src
   out = ctx.clone(device=data.device)
-  if store.src[0].op is Ops.INDEX:
-    indices, source = store.src[0].src[1:], ctx if ctx.has_buffer_identity(after_ok=True) else ctx.alu(Ops.CONTIGUOUS)
-    return out.after(out.index(*indices).store(0)), source.index(*indices)
-  return out.after(out.store(0)), ctx
+  indices, source = store.src[0].src[1:], ctx if ctx.has_buffer_identity(after_ok=True) else ctx.alu(Ops.CONTIGUOUS)
+  return out.after(out.index(*indices).store(0)), source.index(*indices)
 
 def index_gradient(ctx:UOp, ret:UOp):
   data, *indices = ret.src
@@ -92,7 +90,9 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.TUPLE), lambda ctx: ctx.src),
   (UPat(Ops.AFTER, src=(UPat.var("d"), UPat(Ops.CALL, name="k"))), lambda ctx, d, k:
     (ctx, UOp.maketuple(*(ctx if i == k.src.index(d)-1 else UOp(Ops.NOOP) for i in range(len(k.src)-1))))),
-  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE)), name="ret"), lambda ctx,ret: after_store_gradient(ctx, ret)),
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE, src=(UPat(Ops.INDEX), UPat()))), name="ret"), lambda ctx,ret: index_store_gradient(ctx, ret)),
+  # clone/assign gradient passes through to val
+  (UPat(Ops.AFTER, src=(UPat(), UPat(Ops.STORE))), lambda ctx: (None, ctx)),
   (UPat(Ops.STORE, src=(UPat(), UPat())), lambda ctx: (None, ctx)),
   # there's no gradient for bitcast
   (UPat(Ops.BITCAST), lambda: (None,)),

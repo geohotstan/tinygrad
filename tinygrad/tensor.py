@@ -204,15 +204,6 @@ class Tensor(RandMixin):
     self.uop = x.uop
     return self
 
-  def _store(self, target:UOp, x:Tensor) -> Tensor:
-    assign = self.uop.after(target.store(x.uop))
-    if (base := self.uop.base).op in {Ops.BUFFER, Ops.AFTER} and self.uop is not base and not self.uop.has_buffer_identity():
-      ib = self.uop
-      while not ib.has_buffer_identity() and ib is not base: ib = ib.src[0]
-      _apply_map_to_tensors({ib:ib.after(assign)}, name="Embed View Assign")
-    else: self.uop = assign
-    return self
-
   def assign(self, x:Tensor|PyConst|list|tuple) -> Tensor:
     if self.dtype in dtypes.weaks: self.uop = self.uop.clone()
     is_disk = isinstance(self.device, str) and self.device.startswith(("DISK", "TINYFS"))
@@ -231,7 +222,18 @@ class Tensor(RandMixin):
     if is_disk:
       (b:=self._buffer()).copy_from(Buffer("PYTHON", b.size, b.dtype, opaque=x._data()))
       return self
-    return self._store(self.uop, x)
+    # STORE+AFTER: STORE is the write effect (void), AFTER wraps the view for correct shape/ranging
+    assign = self.uop.after(self.uop.store(x.uop))
+    if (base := self.uop.base).op in {Ops.BUFFER, Ops.AFTER} and self.uop is not base and not self.uop.has_buffer_identity():
+      # view assign: replace at the buffer-identity level (e.g. RESHAPE(BUFFER)) so @function's substitution catches it
+      ib = self.uop
+      while not ib.has_buffer_identity() and ib is not base: ib = ib.src[0]
+      assigned_ib = ib.after(assign)
+      _apply_map_to_tensors({ib: assigned_ib}, name="Embed View Assign")
+    else:
+      # simple assign
+      self.uop = assign
+    return self
 
   def _buffer(self) -> Buffer:
     from tinygrad.engine.realize import capturing
@@ -466,21 +468,21 @@ class Tensor(RandMixin):
         raise RuntimeError("can't setitem on a tensor with other uses")
     idx = [indices] if (isinstance(indices, list) and all_int(indices)) or not isinstance(indices, (tuple, list)) else list(indices)
     is_disk = isinstance(self.device, str) and self.device.startswith("DISK")
-    if is_disk and any(isinstance(i, (Tensor, list, tuple)) for i in idx): raise RuntimeError("advanced setitem is not supported for DISK tensors")
-    if is_disk:
+    advanced = any(isinstance(i, (Tensor, list, tuple)) for i in idx)
+    realized = is_disk or self.uop.base.op is Ops.BUFFER or self.uop._base_buffer_is_realized()
+    if (not self.uop.base.is_realized and self.is_floating_point()) or not (advanced or realized):
+      if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+      # __iadd__/__isub__ creates AFTER(view, STORE(view, computed)); unwrap to get the computed value
+      if v.uop.op is Ops.AFTER and any(s.op is Ops.STORE for s in v.uop.src[1:]): v = v._apply_uop(lambda x: x.src[1].src[1])
+      self.replace(self._getitem(indices, v))
+    elif advanced: # advanced setitem
+      if is_disk: raise RuntimeError("advanced setitem is not supported for DISK tensors")
+      if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
+      self.assign(self._getitem(indices, v))
+    else: # basic setitem
       view = self[indices]
       if isinstance(v, Tensor) and v.uop.op is Ops.AFTER and v.uop in view.uop.base.src: return
       view.assign(v)
-      return
-    if not self.uop.base.is_realized: self.uop = self.uop.clone()
-    _, coords, advanced = self._resolve_indices(indices, direct=True)
-    target = self._index(*coords, store=True, unique=not advanced)
-    if isinstance(v, Tensor) and v.uop.op is Ops.AFTER and v.uop in target.uop.base.src: return
-    if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
-    v = v._broadcast_to(target.shape)
-    if v.uop.device is not None and self.device is not None and self.device != v.device:
-      raise RuntimeError(f"assign device mismatch {self.device} != {v.device}")
-    self._store(target.uop, v)
 
   def __delitem__(self, indices) -> None:
     raise TypeError("Tensor does not support deleting items")
