@@ -61,9 +61,9 @@ class BufferizeOpts:
   removable: bool = True
 
 def broadcast_rngs(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
-  # the buffer of a shaped INDEX is only ranged on its trailing (unindexed) dims,
-  # its leading dims are covered by the index srcs
-  if x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape for s in x.src[1:]) and src is x.src[0]:
+  # the buffer of a gather INDEX is only ranged on its trailing (unindexed) dims,
+  # its leading dims are covered by the coordinate srcs (scalar coords cover one dim each too)
+  if x.op is Ops.INDEX and len(x.src) > 1 and src is x.src[0]:
     return tuple(x.src[1:]) + rngs[len(x.src)-1:]
   if x.op not in GroupOp.Broadcastable: return rngs
   baxes, nleft = broadcast_axes(src.shape, x.shape), len(x.shape)-len(src.shape)
@@ -331,11 +331,12 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
 
     rngs = out_rngs  # rngs is the input ranges  # pylint: disable=possibly-used-before-assignment
 
-    # a shaped INDEX covers the leading dims of its buffer with the index srcs instead of ranges.
-    # a producer containing a REDUCE can't fold the address (the reduce machinery works on
-    # ranges): realize its data root and read the gather flat. the toposort gates at AFTER, the
-    # provenance of a realized buffer is already materialized
-    if x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape for s in x.src[1:]):
+    # a gather INDEX covers the leading dims of its buffer with its coordinate srcs instead of
+    # ranges (a scalar coordinate still selects one leading axis). a producer containing a REDUCE
+    # can't fold the address (the reduce machinery works on ranges): realize its data root and
+    # read the gather flat. the toposort gates at AFTER, the provenance of a realized buffer is
+    # already materialized
+    if x.op is Ops.INDEX and len(x.src) > 1:
       buf = x.src[0]
       while buf.op in GroupOp.Movement: buf = buf.src[0]
       if buf not in rctx.realize_map and any(n.op is Ops.REDUCE for n in buf.toposort(gate=lambda n: n.op is not Ops.AFTER)):
