@@ -1233,8 +1233,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     dim, src = self._pre_scatter(dim, index, src)
     streams = self._axis_streams(dim, index)
     grid = streams[0].shape
-    vflat = src.shrink_to(index.shape)._broadcast_to(grid)
-    vrow  = src.shrink_to(index.shape).reshape((-1,))
+    vrow = src.shrink_to(index.shape).reshape((-1,))
     # collisions among writes resolve among the writes themselves: pairwise-compare, keep each
     # group's first position as representative and reduce its values there. WHERE keeps
     # identities out of the arithmetic so inf/nan never meet zero.
