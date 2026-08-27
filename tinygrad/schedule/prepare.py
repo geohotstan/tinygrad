@@ -27,6 +27,10 @@ pm_fold_moved_after = PatternMatcher([
 
 # movement op on INDEX as a PatternMatcher
 def _mop_index(r:UOp, idx:UOp):
+  # a shaped INDEX addresses its leading dims with the index srcs; folding movement into it would
+  # change what those srcs mean (per-element coords can't be re-expressed as broadcast coords).
+  # the buffer-side view chain lowers to a flat read at apply time instead (lower_shaped_gather)
+  if any(s.shape != () for s in idx.src[1:]): return None
   idxs = idx.src[1:]
   if len(idxs) == len(r.shape):
     return r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), arg=idx.arg)

@@ -334,6 +334,11 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
         baxes, nleft = broadcast_axes(x.shape, big_shape), len(big_shape)-len(x.shape)
         out_rngs_c = rctx.range_map[c][1]
         consumer_rngs.append(tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(out_rngs_c[:len(big_shape)]) if j >= nleft))
+      # a gather view's frame ranges are placeholder bookkeeping for the emission fold
+      # (lower_shaped_gather), not real loops over x: they must not drive range merges, two gathers
+      # over one view would otherwise realize the view into a STAGE the flat read never targets
+      elif c.op is Ops.INDEX and len(c.src) > 1 and c.src[0] is x and x in rctx.gather_views:
+        continue
       else: consumer_rngs.append(broadcast_rngs(c, x, rctx.range_map[c][0]))
     if x in rctx.realize_map:
       # if this is in the realize_map, we create new ranges (at the output)
