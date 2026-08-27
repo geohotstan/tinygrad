@@ -189,7 +189,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         b = tensors[ai]._broadcast_to(big_shape)
         sz = self.shape[dims[ai]]
         w = (b < 0).where(b + sz, b)
-        parts.append(w); espans.append(big_shape); ai += 1
+        parts.append(w)
+        espans.append(big_shape)
+        ai += 1
       elif pp['collapse_dim']:
         continue  # collapsed ints carry no write-grid axis
       else:
@@ -198,7 +200,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         length = ceildiv(abs(e_ - b0), abs(st_))
         walk = type(self).arange(length, dtype=dtypes.default_int)
         coord = e_ - 1 - walk * abs(st_) if st_ < 0 else b0 + walk * st_
-        parts.append(coord.cast(dtypes.default_int)); espans.append((length,))
+        parts.append(coord.cast(dtypes.default_int))
+        espans.append((length,))
     assert not seen_none, "None injection is not supported inside advanced setitem"
     if len(parts) != self.ndim: raise IndexError("advanced setitem coordinate layout does not match tensor rank")
 
