@@ -14,6 +14,63 @@ def reduce_gradient(ctx:UOp, ret:UOp, op:Ops):
     zero_count = is_zero.cast(sum_acc_dtype(is_zero.dtype))._rop(Ops.ADD, axes)
     return (ctx * is_zero.where(zero_count.eq(1).where(safe_x._rop(Ops.MUL, axes), 0), ret/safe_x),)
 
+def index_gradient(ctx:UOp, ret:UOp):
+  """
+  gather backward: scatter-sum ctx into a zeroed staging buffer at the addresses the forward
+  read from. duplicates sum (positions are compared among themselves), out-of-bounds positions
+  land in a sacrificial row. Everything materializes eagerly: gradient graphs only accept
+  buffers as CALL arguments.
+  """
+  from tinygrad.uop.ops import KernelInfo
+  from tinygrad.helpers import prod
+  from tinygrad.dtype import dtypes as _dt
+  from tinygrad.tensor import Tensor
+  view, addr_full = ret.src[0], ret.src[1]
+  if len(ret.src) != 2: return None
+  big = tuple(int(x) for x in addr_full.shape)
+  if not big or not all(isinstance(x, int) for x in ret.shape): return None
+  kept = tuple(int(x) for x in ret.shape[len(big):])
+  kept_n = int(prod(kept)) if kept else 1
+  K = int(prod(big)) * kept_n
+  if K == 0: return None
+  lin, gate = addr_full, None
+  if addr_full.op is Ops.WHERE and addr_full.src[2].is_invalid:
+    gate, lin = addr_full.src[0], addr_full.src[1]
+  block = int(view.shape[0])
+  if not isinstance(block, int): return None
+  dev, dt = view.device, view.dtype
+
+  # eager per-position streams: address, contribution value, survival gate
+  def tensor_of(u:UOp, shape:tuple[int, ...]) -> Tensor:
+    return Tensor(u, device=dev, dtype=dt if False else u.dtype).reshape(shape) if False else \
+           Tensor._apply_uop.__func__(Tensor(_wrap := u), lambda x: x) if False else Tensor(u)
+  a_t = Tensor(lin.cast(_dt.default_int), device=dev).reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
+  v_t = Tensor(ctx, device=dev).reshape(tuple(ret.shape)).reshape((K,))
+  g_t = (Tensor(gate, device=dev, dtype=_dt.bool) if gate is not None else Tensor.ones(tuple(big), dtype=_dt.bool, device=dev)) \
+          .reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
+
+  # duplicate destinations: compare positions pairwise, first position of each collision group
+  # is the representative and sums the whole group. WHERE keeps identities out of the arithmetic
+  pos = Tensor.arange(K, dtype=_dt.default_int).to(dev)
+  same = (a_t[:, None] == a_t[None, :])
+  first = ~(same & (pos[None, :] < pos[:, None])).any(1)
+
+  summed = same.where(v_t[None, :].expand(same.shape), 0).sum(1)
+
+  padded = (block + 1) * kept_n
+  staging = Tensor.zeros(padded, dtype=dt, device=dev).contiguous()
+  def fxn(ph_zeros:UOp, *ph_rest:UOp):
+    ph_a, ph_v, ph_gate = ph_rest[0], ph_rest[1], ph_rest[2]
+    j = UOp.range(K, 0)
+    live = ph_gate[j]
+    safe = ph_a[j].maximum(0).minimum(block)
+    final = live.where(safe, block).cast(_dt.default_int)
+    tgt = ph_zeros.index(final)
+    return tgt.store(ph_v[j]).end(j).sink(arg=KernelInfo(name="index_grad", opts_to_apply=()))
+  staged_t = staging.custom_kernel(a_t, summed, first, fxn=fxn)[0]
+  flat = staged_t.reshape((block + 1, kept_n)).shrink(((0, block), (0, kept_n)))
+  return (flat.reshape(view.shape).cast(ctx.dtype).uop, None)
+
 def _compact_params(body:UOp, all_args:tuple[UOp, ...]) -> tuple[UOp, tuple[UOp, ...]]:
   """Remove unused PARAMs from body and return compacted (body, args)."""
   used = sorted({p.arg.slot: p for p in body.toposort() if p.op is Ops.PARAM}.items())
@@ -65,6 +122,7 @@ pm_gradient = PatternMatcher([
   (UPat(Ops.MUL, name="ret"), lambda ctx, ret: (ret.src[1]*ctx, ret.src[0]*ctx)),
   (UPat(Ops.WHERE, name="ret"), lambda ctx, ret: (None, ret.src[0].where(ctx, ctx.const_like(0)), ret.src[0].where(ctx.const_like(0), ctx))),
   (UPat(Ops.REDUCE, name="ret"), lambda ctx, ret: reduce_gradient(ctx, ret, ret.arg[0])),
+  (UPat(Ops.INDEX, name="ret"), lambda ctx, ret: index_gradient(ctx, ret)),
   (UPat(Ops.CONTIGUOUS), lambda ctx: (ctx,)),
   (UPat(Ops.CONTIGUOUS_BACKWARD), lambda ctx: (ctx.contiguous(),)),
   (UPat(Ops.RESHAPE, name="ret"), lambda ctx, ret: (ctx.reshape(ret.src[0].shape), None)),
