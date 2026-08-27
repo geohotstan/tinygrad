@@ -8,6 +8,13 @@ _strip_unique_pm = PatternMatcher([
 ])
 def _strip_unique(u: UOp) -> UOp: return graph_rewrite(u, _strip_unique_pm)
 
+def _check_write(tc: unittest.TestCase, ft, fu):
+  # Graph identity through the direct-write (custom_kernel) commit. That path materializes its
+  # grid inputs into data-backed buffers -- fresh BUFFER slots per construction -- and its host
+  # reads rewire live Tensor fields, so each side is built from fresh inputs and _strip_unique
+  # normalizes the slots before the identity comparison.
+  tc.assertIs(_strip_unique(ft().uop), _strip_unique(fu()))
+
 def _t(*shape):
   return Tensor.arange(math.prod(shape)).reshape(*shape)
 
@@ -289,22 +296,23 @@ class TestTensorUOpLoss(unittest.TestCase):
     self.assertIs(t.nll_loss(Y, weight=w, ignore_index=1).uop, t.uop.nll_loss(Y.uop, weight=w.uop, ignore_index=1))
 
 class TestTensorUOpScatter(unittest.TestCase):
+  def _check(self, ft, fu): _check_write(self, ft, fu)
   def test_scatter(self):
-    x, idx, src = _t(3, 4).float(), Tensor([[0, 1, 2, 0]], dtype=dtypes.int32), _t(1, 4).float()
-    self.assertIs(x.scatter(0, idx, src).uop, x.uop.scatter(0, idx.uop, src.uop))
+    self._check(lambda: _t(3, 4).float().scatter(0, _ti([[0, 1, 2, 0]]), _t(1, 4).float()),
+                lambda: _t(3, 4).float().uop.scatter(0, _ti([[0, 1, 2, 0]]).uop, _t(1, 4).float().uop))
   def test_scatter_scalar_src(self):
-    x, idx = _t(3, 4).float(), Tensor([[0, 1]], dtype=dtypes.int32)
-    self.assertIs(x.scatter(1, idx, 3.14).uop, x.uop.scatter(1, idx.uop, 3.14))
+    self._check(lambda: _t(3, 4).float().scatter(1, _ti([[0, 1]]), 3.14),
+                lambda: _t(3, 4).float().uop.scatter(1, _ti([[0, 1]]).uop, 3.14))
   # inf cannot be cast to int — this regresses if scalar src is routed through index.dtype first
   def test_scatter_inf_src(self):
-    x, idx = _t(3, 4).float(), Tensor([[0, 1]], dtype=dtypes.int32)
-    self.assertIs(x.scatter(1, idx, float("inf")).uop, x.uop.scatter(1, idx.uop, float("inf")))
+    self._check(lambda: _t(3, 4).float().scatter(1, _ti([[0, 1]]), float("inf")),
+                lambda: _t(3, 4).float().uop.scatter(1, _ti([[0, 1]]).uop, float("inf")))
   def test_scatter_add(self):
-    x, idx = _t(3, 4).float(), Tensor([[0, 1]], dtype=dtypes.int32)
-    self.assertIs(x.scatter(1, idx, 3.14, reduce="add").uop, x.uop.scatter(1, idx.uop, 3.14, reduce="add"))
+    self._check(lambda: _t(3, 4).float().scatter(1, _ti([[0, 1]]), 3.14, reduce="add"),
+                lambda: _t(3, 4).float().uop.scatter(1, _ti([[0, 1]]).uop, 3.14, reduce="add"))
   def test_scatter_multiply(self):
-    x, idx = _t(3, 4).float(), Tensor([[0, 1]], dtype=dtypes.int32)
-    self.assertIs(x.scatter(1, idx, 3.14, reduce="multiply").uop, x.uop.scatter(1, idx.uop, 3.14, reduce="multiply"))
+    self._check(lambda: _t(3, 4).float().scatter(1, _ti([[0, 1]]), 3.14, reduce="multiply"),
+                lambda: _t(3, 4).float().uop.scatter(1, _ti([[0, 1]]).uop, 3.14, reduce="multiply"))
   # tensor src with reduce hits the "elif reduce: raise" branch in both Tensor and UOp paths
   def test_scatter_tensor_src_with_reduce_raises(self):
     x, idx, src = _t(3, 4).float(), Tensor([[0, 1]], dtype=dtypes.int32), _t(1, 2).float()
@@ -312,28 +320,31 @@ class TestTensorUOpScatter(unittest.TestCase):
     with self.assertRaises(TypeError): x.uop.scatter(1, idx.uop, src.uop, reduce="add")
 
 class TestTensorUOpScatterReduce(unittest.TestCase):
-  def _check(self, x, idx, src, **kw):
-    self.assertIs(x.scatter_reduce(0, idx, src, **kw).uop, x.uop.scatter_reduce(0, idx.uop, src.uop, **kw))
-  def test_sum(self):  self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="sum")
-  def test_prod(self): self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="prod")
-  def test_mean(self): self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="mean")
-  def test_amax(self): self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="amax")
-  def test_amin(self): self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="amin")
-  def test_mean_exclude_self(self):
-    self._check(_t(3, 4).float(), Tensor([[0, 1, 0, 1]]*3, dtype=dtypes.int32), Tensor.ones(3, 4).float(), reduce="mean", include_self=False)
+  def _check(self, **kw):
+    _check_write(self,
+      lambda: _t(3, 4).float().scatter_reduce(0, _ti([[0, 1, 0, 1]]*3), Tensor.ones(3, 4).float(), **kw),
+      lambda: _t(3, 4).float().uop.scatter_reduce(0, _ti([[0, 1, 0, 1]]*3).uop, Tensor.ones(3, 4).float().uop, **kw))
+  def test_sum(self):  self._check(reduce="sum")
+  def test_prod(self): self._check(reduce="prod")
+  def test_mean(self): self._check(reduce="mean")
+  def test_amax(self): self._check(reduce="amax")
+  def test_amin(self): self._check(reduce="amin")
+  def test_mean_exclude_self(self): self._check(reduce="mean", include_self=False)
 
 class TestTensorUOpMaskedSelect(unittest.TestCase):
   # only the fixed-size path is pure
-  def _check(self, t, mask, **kw):
-    self.assertIs(t.masked_select(mask, **kw).uop, t.uop.masked_select(mask.uop, **kw))
-  def test_masked_select_1d(self): self._check(_t(6), Tensor([True, False, True, False, True, False]), size=4)
+  def _check(self, shape, mask_data, **kw):
+    _check_write(self,
+      lambda: _t(*shape).masked_select(Tensor(mask_data), **kw),
+      lambda: _t(*shape).uop.masked_select(Tensor(mask_data).uop, **kw))
+  def test_masked_select_1d(self): self._check((6,), [True, False, True, False, True, False], size=4)
   def test_masked_select_2d(self):
-    self._check(_t(3, 3), Tensor([[True, False, True], [False, True, False], [False, False, True]]), size=6, fill_value=-1)
+    self._check((3, 3), [[True, False, True], [False, True, False], [False, False, True]], size=6, fill_value=-1)
 
 class TestTensorUOpNonzero(unittest.TestCase):
-  def _check(self, t, **kw): self.assertIs(t.nonzero(**kw).uop, t.uop.nonzero(**kw))
-  def test_nonzero_1d(self): self._check(_t(5), size=3)
-  def test_nonzero_2d(self): self._check(_t(2, 3), size=4)
+  def _check(self, shape, **kw): _check_write(self, lambda: _t(*shape).nonzero(**kw), lambda: _t(*shape).uop.nonzero(**kw))
+  def test_nonzero_1d(self): self._check((5,), size=3)
+  def test_nonzero_2d(self): self._check((2, 3), size=4)
 
 class TestTensorUOpPool(unittest.TestCase):
   def test_avg_pool2d(self):                _check(self, _t(1, 1, 5, 5).float(), lambda x: x.avg_pool2d())

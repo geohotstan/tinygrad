@@ -166,7 +166,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
   # ***** direct writes: loop over the written positions and store each value at its coordinates *****
 
   def _strides(self) -> tuple[int, ...]:
-    return tuple(prod(self.shape[i + 1:]) for i in range(self.ndim))
+    return tuple(prod(self.shape[i + 1:]) for i in range(self.ndim))  # type: ignore[arg-type]
 
   def _axis_streams(self, dim:int, index:Self) -> list[Self]:
     """Coordinate streams for a scatter along `dim`: index values on `dim`, walking positions elsewhere."""
@@ -209,7 +209,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       if isinstance(idx_expr, OpMixin):
         b = tensors[ai]._broadcast_to(big_shape)
         sz = self.shape[dims[ai]]
-        w = (b < 0).where(b + sz, b)
+        w = (b < 0).where(b + sz, b)  # type: ignore[operator]
         # every tensor member joins the shared pairwise block
         layout.append(("T", tuple(int(x) for x in big_shape), w))
         ai += 1
@@ -281,7 +281,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
   def _in_bounds(self, streams:list[Self]) -> Self:
     ok = type(self).const(True).reshape((1,) * streams[0].ndim).expand(streams[0].shape)
     for c, sz in zip(streams, self.shape):
-      ok = ok & ((0 <= c) & (c < sz)).cast(dtypes.bool)
+      ok = ok & ((0 <= c) & (c < sz)).cast(dtypes.bool)  # type: ignore[operator]
     return ok
 
   def _winners(self, streams:list[Self]) -> Self:
@@ -291,7 +291,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     """
     flats = [c.reshape((-1,)).cast(dtypes.default_int) for c in streams]
     pos = type(self).arange(flats[0].numel(), dtype=dtypes.default_int)
-    same = functools.reduce(lambda a,b: a & b, (fi[:, None] == fj[None, :] for fi, fj in zip(flats, flats)), type(self).const(True))
+    same = functools.reduce(lambda a,b: a & b, (fi[:, None].eq(fj[None, :]) for fi, fj in zip(flats, flats)), type(self).const(True))
     # a position dies when a LATER position writes the same coordinates
     superseded = same & (pos[None, :] > pos[:, None])
     win = ~superseded.any(1)
@@ -308,18 +308,28 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     before the store kernel runs; grids that cannot fold to host data raise instead.
     """
     from tinygrad.uop.ops import UOp, KernelInfo
-    def host(t:Self) -> Self:
-      try: return type(self)(t.numpy(), device=t.device, dtype=t.dtype).contiguous()
+    # pin the input graphs before any host read: realize-time replacement (Tensor side) rewires
+    # live Tensor fields in scope, it never mutates UOp nodes, so building the whole commit from
+    # pinned uops keeps the Tensor and UOp frontends structurally identical (modulo fresh slots)
+    su = [s._uop for s in streams]
+    vu, gu, xu = vals._uop, gate._uop, self._uop
+    def host(t:UOp) -> UOp:
+      # eager route shared by both frontends: read the data on the host, rebuild a data-backed
+      # buffer; grids that cannot fold to host data stay lazy on the pre-read pinned graph
+      try:
+        from tinygrad.tensor import Tensor
+        data = Tensor(t).numpy()
+        return Tensor(data, device=t.device, dtype=t.dtype).uop.contiguous()
       except Exception: return t.contiguous()
     # the destination snapshot executes eagerly like every other write input, so an unrealized
     # destination cannot leak its internal ranges through the CALL into outer verification
-    src = host(self)
+    src = host(xu)
     grid = streams[0].shape
-    parts   = [host(c.reshape((-1,)).cast(dtypes.default_int)) for c in streams]
-    v_up    = vals.cast(self.dtype)
+    parts   = [host(c.reshape((-1,)).cast(dtypes.default_int)) for c in su]
+    v_up    = vu.cast(xu.dtype)
     if int(prod(v_up.shape)) != int(prod(grid)): v_up = v_up._broadcast_to(_broadcast_shape(grid, v_up.shape))
     vflat   = host(v_up.reshape((-1,)))
-    g_up    = gate
+    g_up    = gu
     if int(prod(g_up.shape)) != int(prod(grid)): g_up = g_up._broadcast_to(_broadcast_shape(grid, g_up.shape))
     keep    = host(g_up.reshape((-1,)))
     strides = self._strides()
@@ -332,16 +342,14 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     def fxn(ph_staged:UOp, *ph_rest:UOp):
       ph_parts, ph_val, ph_gate = list(ph_rest[:-2]), ph_rest[-2], ph_rest[-1]
       j = UOp.range(N, 0)
-      addr = None
-      for pp, st in zip(ph_parts, strides):
-        aj = pp[j] * st
-        addr = aj if addr is None else addr + aj
+      addr = ph_parts[0][j] * strides[0]
+      for pp, st in zip(ph_parts[1:], strides[1:]): addr = addr + pp[j] * st
       # dropped positions point at the sacrificial cell instead of using a gated store
       final = ph_gate[j].cast(dtypes.bool).where(addr.maximum(0).minimum(size_flat), size_flat).cast(dtypes.default_int)
       tgt = ph_staged.index(final)
       return tgt.store(ph_val[j].cast(ph_staged.dtype)).end(j).sink(arg=KernelInfo(name="direct_write", opts_to_apply=()))
     outs = staged.custom_kernel(*parts, vflat, keep, fxn=fxn)
-    return type(self)(outs[0]._uop.reshape(padded_shape)).shrink(tuple((0, sz) for sz in self.shape))
+    return self._wrap_uop(outs[0].reshape(padded_shape)).shrink(tuple((0, sz) for sz in self.shape))
 
   @classmethod
   def arange(cls, start, stop=None, step=1, dtype:DTypeLike|None=None) -> Self:
@@ -1240,11 +1248,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       if d > 0:
         s = s.reshape((1,)*d + (imoved.shape[d],) + (1,)*(moved.ndim-d-1)).expand(imoved.shape)
       streams.append(s)
-    addr = None
-    for s, st in zip(streams, strides):
-      term = (s * st).reshape((-1,))
-      addr = term if addr is None else addr + term
-    valid = ((streams[0] >= 0) & (streams[0] < moved.shape[0])).reshape((-1,))
+    addr = (streams[0] * strides[0]).reshape((-1,))
+    for s, st in zip(streams[1:], strides[1:]): addr = addr + (s * st).reshape((-1,))
+    valid = ((streams[0] >= 0) & (streams[0] < moved.shape[0])).reshape((-1,))  # type: ignore[operator]
     out = type(self)._wrap_uop(flat_moved._uop.index(addr._uop.valid(valid._uop)))
     return out.reshape(out_shape).transpose(0, dim)
 
@@ -1282,7 +1288,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         x = x.gather(i, index)
     return x.cast(self.dtype)
 
-  def _pre_scatter(self, dim:int, index:Self, src:Self) -> tuple[Self, Self]:
+  def _pre_scatter(self, dim:int, index:Self, src:Self) -> tuple[int, Self]:
     if index.device is not None and self.device is not None and index.device != self.device:
       raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
     if src.device is not None and self.device is not None and src.device != self.device:
@@ -1338,10 +1344,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     okflat = self._in_bounds(streams).reshape((-1,))
     flats = [c.reshape((-1,)).cast(dtypes.default_int) for c in streams]
     valid_pair = functools.reduce(lambda a,b: a & b, (o[:, None] & o[None, :] for o in [okflat]), type(self).const(True))
-    same = functools.reduce(lambda a,b: a & b, (fi[:, None] == fj[None, :] for fi, fj in zip(flats, flats)), type(self).const(True)) & valid_pair
+    same = functools.reduce(lambda a,b: a & b, (fi[:, None].eq(fj[None, :]) for fi, fj in zip(flats, flats)), type(self).const(True)) & valid_pair
     first = ~((same & (wpos[None, :] < wpos[:, None])).any(1))
 
-    def grouped(ident:ConstType, kind:str) -> Self:
+    def grouped(ident:ConstType, kind:str) -> Self:  # type: ignore[type-var, misc]
       # WHERE keeps identities out of the arithmetic so inf/nan never meet zero
       sel = same.where(vrow[None, :].expand(same.shape), ident)
       return {"sum": lambda x: x.sum(1), "prod": lambda x: x.prod(1),
@@ -1422,13 +1428,14 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     ```
     """
     if not dtypes.is_bool(mask.dtype): raise RuntimeError(f"masked_select expects bool mask tensor, got {mask.dtype}")
-    x, mask = self.flatten(), mask._broadcast_to(self.shape).flatten()
-    mask_cumsum = mask.cumsum()
+    mu = mask._uop  # pinned: realize-time rewrites inside the internal scatter rewire live Tensor
+    x, mask_cumsum = self.flatten(), type(self)._wrap_uop(mu)._broadcast_to(self.shape).flatten().cumsum()  # fields, not nodes
     if size is None:
       counts = type(self).zeros(mask_cumsum[-1].item() if mask.numel() else 0, dtype=dtypes.int32, buffer=False)
       return x[counts.scatter(0, mask_cumsum, 1, reduce='add').cumsum()]
     counts = type(self).zeros(size, dtype=dtypes.int32, buffer=False).scatter(0, mask_cumsum, 1, reduce='add')
-    return (type(self).arange(size) < mask.sum()).where(x[counts.cumsum()], fill_value).cast(self.dtype)
+    flat_sum = type(self)._wrap_uop(mu)._broadcast_to(self.shape).flatten().sum()
+    return (type(self).arange(size) < flat_sum).where(x[counts.cumsum()], fill_value).cast(self.dtype)
 
   def nonzero(self, size:int|None=None, fill_value:ConstType=0) -> Self:
     """

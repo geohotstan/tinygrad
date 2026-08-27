@@ -37,13 +37,8 @@ def index_gradient(ctx:UOp, ret:UOp):
   if addr_full.op is Ops.WHERE and addr_full.src[2].is_invalid:
     gate, lin = addr_full.src[0], addr_full.src[1]
   block = int(view.shape[0])
-  if not isinstance(block, int): return None
   dev, dt = view.device, view.dtype
 
-  # eager per-position streams: address, contribution value, survival gate
-  def tensor_of(u:UOp, shape:tuple[int, ...]) -> Tensor:
-    return Tensor(u, device=dev, dtype=dt if False else u.dtype).reshape(shape) if False else \
-           Tensor._apply_uop.__func__(Tensor(_wrap := u), lambda x: x) if False else Tensor(u)
   a_t = Tensor(lin.cast(_dt.default_int), device=dev).reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
   v_t = Tensor(ctx, device=dev).reshape(tuple(ret.shape)).reshape((K,))
   # in-bounds gate: zero out OOB positions' contributions before grouping
