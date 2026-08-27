@@ -366,9 +366,11 @@ class UOp(RandMixin, metaclass=UOpMetaClass):
         return inner_shape
 
       case Ops.INDEX:
-        shp:list[sint] = []
-        for s in self.src[1:]: shp.extend(list(s.shape))
-        return tuple(shp) + self.src[0].shape[len(self.src[1:]):]
+        # the shaped index srcs all broadcast against each other and cover the leading dims of
+        # src[0]; the remaining (trailing) dims of src[0] are covered by ranges instead
+        shaped = [s.shape for s in self.src[1:] if s.shape]
+        big_shape = _broadcast_shape(*shaped) if shaped else ()
+        return big_shape + self.src[0].shape[len(self.src)-1:]
 
       case Ops.STACK:
         if len(self.src) == 0: return ()
