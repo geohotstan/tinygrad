@@ -130,9 +130,12 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         i = (i < 0).where(i + sz, i).cast(acc_dtype)   # negative index -> from the end
         idxs.append(i * st)
         valids.append((i >= 0) & (i < sz))             # out of bounds reads 0
-      # clamp the address into the flat block (lets the div/mod in reshape folding fold) and gate
-      # the load with the bounds check: out of bounds indices read 0
-      lin, valid = type(self).usum(*idxs), type(self).uprod(*valids)
+      # combine per-dim offsets: ordinary elementwise add over the grid (no trace-time REDUCE),
+      # so codegen never sees a broadened REDUCE that its expand_broadcast cannot reconcile
+      lin = idxs[0]
+      for a in idxs[1:]: lin = lin + a
+      valid = valids[0]
+      for v in valids[1:]: valid = valid & v
       addr = lin.maximum(0).minimum(prod(sizes)-1)._uop.valid(valid._uop)
       # NOTE: this must stay a pure lazy INDEX (no output buffer): the scheduler materializes it
       # (bufferize_to_store) exactly when it can't fuse, and Tensor[idx].uop is t.uop[idx]
