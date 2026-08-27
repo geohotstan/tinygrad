@@ -306,7 +306,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     """
     from tinygrad.uop.ops import UOp, KernelInfo
     def host(t:Self) -> Self:
-      return type(self)(t.numpy(), device=t.device, dtype=t.dtype)
+      try: return type(self)(t.numpy(), device=t.device, dtype=t.dtype).contiguous()
+      except Exception: return t.contiguous()
     # the destination snapshot executes eagerly like every other write input, so an unrealized
     # destination cannot leak its internal ranges through the CALL into outer verification
     src = host(self)
@@ -324,7 +325,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     pads = tuple((0, 1) if d == 0 else (0, 0) for d in range(self.ndim))
     padded_shape = tuple(sz + (1 if d == 0 else 0) for d, sz in enumerate(self.shape))
     # the kernel sees one flat staging line: a scalar address must mean one element
-    staged = src.pad(pads).reshape((int(prod(padded_shape)),)).contiguous().realize()
+    staged = src.pad(pads).reshape((int(prod(padded_shape)),)).contiguous()
     def fxn(ph_staged:UOp, *ph_rest:UOp):
       ph_parts, ph_val, ph_gate = list(ph_rest[:-2]), ph_rest[-2], ph_rest[-1]
       j = UOp.range(N, 0)
