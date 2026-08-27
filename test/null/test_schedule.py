@@ -685,17 +685,17 @@ class TestSchedule(unittest.TestCase):
   def test_simple_indexing_alt(self):
     X = Tensor.arange(16).reshape(4, 4)
     xt = X[[1, 2], [-1, 2]]
-    check_schedule(xt, 1)
+    check_schedule(xt, 2)
 
   def test_advanced_indexing(self):
     X = Tensor.arange(10)+1
     xt = X[[0, -1]]
-    check_schedule(xt, 1)
+    check_schedule(xt, 2)
 
   def test_advanced_indexing_alt(self):
     X = Tensor.arange(6).reshape(3, 2)+1
     xt = X[[Tensor([2]), Tensor([1])]]
-    check_schedule(xt, 1)
+    check_schedule(xt, 2)
 
   def test_split_advanced_indexing_not_recomputed(self):
     with Context(SPLIT_REDUCEOP=1):
@@ -791,7 +791,8 @@ class TestSchedule(unittest.TestCase):
     samples = Tensor.randint(BS:=getenv("BS", 512), high=cast(int,Y_train.shape[-1])).realize()
     yt = Tensor.randn(BS, 10).realize()
     loss = yt.sparse_categorical_crossentropy(Y_train[samples])
-    check_schedule(loss, 4)
+    # one less kernel than the one-hot gather: the gather is a direct indexed load
+    check_schedule(loss, 3)
 
   def test_arange_fuse_grouped_children(self):
     X = Tensor.empty(4, 4).realize()
@@ -1703,7 +1704,7 @@ class TestSchedule(unittest.TestCase):
   def test_advanced_simple_indexing_combined(self):
     X = Tensor.arange(16).reshape(4, 4)
     xt = X[1:2, [-1, 2]]
-    check_schedule(xt, 1)
+    check_schedule(xt, 2)
 
   def test_arange_index_shrink(self):
     Tensor.manual_seed(0)

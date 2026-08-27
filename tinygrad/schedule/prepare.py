@@ -4,7 +4,7 @@ from tinygrad.uop.ops import PatternMatcher, UPat, Ops, UOp, resolve, GroupOp
 from tinygrad.uop.ops import graph_rewrite, rewrite_group, shape_to_shape_arg, ParamArg, identity_element
 from tinygrad.uop.movement import mop_cleanup
 from tinygrad.helpers import prod, getenv, all_int, DEBUG, SPLIT_REDUCEOP, OPENPILOT_HACKS, FLOAT16, argsort
-from tinygrad.schedule.indexing import apply_movement_op, is_shaped_index
+from tinygrad.schedule.indexing import apply_movement_op
 from tinygrad.schedule.allreduce import create_allreduce_function
 from tinygrad.schedule.multi import multi_pm
 
@@ -27,9 +27,6 @@ pm_fold_moved_after = PatternMatcher([
 
 # movement op on INDEX as a PatternMatcher
 def _mop_index(r:UOp, idx:UOp):
-  # a shaped INDEX addresses its leading dims with the index srcs; folding movement into it would
-  # change what those srcs mean. it lowers to a scalar-indexed access at apply time instead
-  if is_shaped_index(idx.op, idx.src): return None
   idxs = idx.src[1:]
   if len(idxs) == len(r.shape):
     return r.src[0].index(*apply_movement_op(r.op, r.src[0].shape, r.marg, idxs), arg=idx.arg)

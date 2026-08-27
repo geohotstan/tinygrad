@@ -91,7 +91,6 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         if index.device is not None and self.device is not None and index.device != self.device:
           raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
         assert isinstance(size, int), "size must be an int"
-        index = (index < 0).where(index+size, index)  # treat negative index values
       else: parsed = self._parse_view_index(index, size)
       indices_parsed.append({**parsed, "index":index})
       if index is not None: dim += 1
@@ -101,49 +100,38 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     x_dims = [p for p in indices_parsed if not p["collapse_dim"]]
     x = x.reshape(tuple(p["size"] for p in x_dims))
 
-    # tensor indexing
+    # tensor indexing: direct gather. load each index tensor, fold them into one flat index into the
+    # flattened advanced block, and INDEX the target with it. out of bounds indices read 0
     if tops := [(d, p) for d, p in enumerate(x_dims) if is_adv(p['index'])]:
-      dims, tensors, masks = [d for d, _ in tops], [p['index'] for _, p in tops], []
+      dims, tensors = [d for d, _ in tops], [p['index'] for _, p in tops]
       big_shape = _broadcast_shape(*(t.shape for t in tensors))
-
-      # consecutive tensor indices with int shapes: use linear indexing instead of one-hot masks
-      consecutive = dims == list(range(dims[0], dims[0] + len(dims)))
-      if v is None and len(dims) > 1 and consecutive and all_int(ishp := tuple(x.shape[d] for d in dims)):
-        strides = tuple(prod(ishp[i+1:]) for i in range(len(dims)))
-        linear_idx = type(self).usum(*[t * s for t, s in zip(tensors, strides)])
-        valid = type(self).uprod(*[(t >= 0) & (t < s) for t, s in zip(tensors, ishp)])
-        pre, post = x.shape[:dims[0]], x.shape[dims[-1]+1:]
-        x = x.reshape(pre + (prod(ishp),) + post)[tuple([slice(None)] * len(pre)) + (valid.where(linear_idx, 0),)]
-        return valid.reshape((1,) * len(pre) + big_shape + (1,) * len(post)).where(x, 0)
-
-      pre_reduce_shape = x.shape[:dims[0]] + big_shape + x.shape[dims[0]:]
-
-      # create index masks
-      for dim, tensor in zip(dims, tensors):
-        try: i = tensor.reshape(tensor.shape + (1,)*(x.ndim - dims[0])).expand(pre_reduce_shape)
-        except ValueError as err: raise IndexError(f"cannot broadcast indices: {err}") from err
-        masks.append(i._one_hot_along_dim(num_classes=x.shape[dim], dim=(dim - x.ndim)))
-
-      # reduce masks to 1 mask
-      mask = type(self).uprod(*masks)
-
-      # inject 1's for the extra dims added in create masks
-      reshape_arg = x.shape[:dims[0]] + (1,) * len(big_shape) + x.shape[dims[0]:]
-      # sum reduce the extra dims introduced in create masks
-      x_pre = x  # save collapsed shape for advanced setitem
-      x = (mask.where(x.reshape(reshape_arg), 0)).sum(sum_axis:=tuple(d + len(big_shape) for d in dims), dtype=x.dtype)
-
-      # special permute case
-      if (permuted := dims[0] != 0 and len(dims) != 1 and tuple(dims) != tuple(range(dims[0], dims[-1]+1))):
-        mask, x = (y.permute(*range(dims[0], dims[0]+len(big_shape)), *range(0, dims[0]), *range(dims[0]+len(big_shape), y.ndim)) for y in (mask, x))
-
-      if v is None: return x  # advanced getitem
-      # advanced setitem: resolve tensor dims in collapsed space, then fall through to basic setitem path
-      vb = v._broadcast_to(_broadcast_shape(x.shape, v.shape))
-      for dim in sum_axis: vb = vb.unsqueeze(dim)  # add back reduced dims from sum
-      start = dims[0] if not permuted else 0
-      vb = x_pre._masked_merge(vb, mask, tuple(range(start, start + len(big_shape))))
-    elif v is None: return x  # basic getitem
+      if v is not None: raise NotImplementedError("advanced setitem is not implemented")
+      assert all(isinstance(x.shape[d], int) for d in dims), "does not support symbolic shape"
+      kept = tuple(d for d in range(x.ndim) if d not in dims)
+      # advanced dims to the front, flattened to one dim. the INDEX covers that dim, kept dims are unindexed
+      sizes = tuple(x.shape[d] for d in dims)
+      flat = x.permute(*dims, *kept).reshape((prod(sizes),) + tuple(x.shape[d] for d in kept))
+      # the flat index is clamped, but it has to be representable on the underlying buffer
+      acc_dtype = dtypes.int64 if flat._uop.base.max_numel() > 2**31-1 else dtypes.int32
+      idxs, valids = [], []
+      for t, sz, st in zip(tensors, sizes, (prod(sizes[i+1:]) for i in range(len(sizes)))):
+        i = t._broadcast_to(big_shape) if t.shape != big_shape else t
+        i = (i < 0).where(i + sz, i).cast(acc_dtype)   # negative index -> from the end
+        idxs.append(i * st)
+        valids.append((i >= 0) & (i < sz))             # out of bounds reads 0
+      # clamp the address into the flat block (lets the div/mod in reshape folding fold) and gate
+      # the load with the bounds check: out of bounds indices read 0
+      lin, valid = type(self).usum(*idxs), type(self).uprod(*valids)
+      addr = lin.maximum(0).minimum(prod(sizes)-1)._uop.valid(valid._uop)
+      # NOTE: this must stay a pure lazy INDEX (no output buffer): the scheduler materializes it
+      # (bufferize_to_store) exactly when it can't fuse, and Tensor[idx].uop is t.uop[idx]
+      x = type(self)._wrap_uop(flat._uop.index(addr))
+      # numpy puts the broadcast dims in place when the advanced indices are consecutive, else first
+      if dims[0] != 0 and (len(dims) == 1 or dims == list(range(dims[0], dims[0]+len(dims)))):
+        nbig, nkept = len(big_shape), len(kept)
+        x = x.permute(tuple(range(nbig, nbig+dims[0])) + tuple(range(nbig)) + tuple(range(nbig+dims[0], nbig+nkept)))
+      return x
+    if v is None: return x  # basic getitem
     # basic setitem: broadcast v, reshape to self.ndim (unsqueeze int dims, squeeze None dims)
     else: vb = v._broadcast_to(x.shape)
     vb = vb.reshape(tuple(1 if p['collapse_dim'] else p['size'] for p in indices_parsed if p['index'] is not None))

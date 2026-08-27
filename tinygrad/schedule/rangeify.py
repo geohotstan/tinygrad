@@ -330,9 +330,18 @@ def renumber_range(ctx:LocalAddBufferContext, r:UOp):
 
 def find_bufs(x:UOp):
   idxs = [s for s in x.toposort(gate=lambda x: x.op is not Ops.AFTER) if s.op is Ops.INDEX]
-  read_from: dict[UOp, Ops] = {}
-  if any((buf:=idx.buf_uop).op in {Ops.BUFFER, Ops.PARAM} and read_from.setdefault(buf, op:=idx.src[0].op) is not op for idx in idxs):
-    raise RuntimeError(f"cycle detected while indexing {buf}")
+  read_from: dict[UOp, bool] = {}
+  for idx in idxs:
+    if (buf:=idx.buf_uop).op not in {Ops.BUFFER, Ops.PARAM}: continue
+    # a read is either direct or through a STAGE (an INDEX wrapper is a direct read of the buffer)
+    staged = idx.src[0].op is Ops.STAGE
+    # a buffer read both directly and through a STAGE is only a cycle when the staged value
+    # itself reads the buffer (an in-kernel read of partially updated data)
+    if read_from.get(buf, staged) != staged:
+      stage_idx = idx if staged else next(i for i in idxs if i.buf_uop is buf and i.src[0].op is Ops.STAGE)
+      if any(i.op is Ops.INDEX and i.buf_uop is buf and i.src[0].op is not Ops.STAGE for i in stage_idx.toposort()):
+        raise RuntimeError(f"cycle detected while indexing {buf}")
+    read_from[buf] = staged
 
 to_define_global = PatternMatcher([
   (UPat(Ops.STORE, name="x"), find_bufs),

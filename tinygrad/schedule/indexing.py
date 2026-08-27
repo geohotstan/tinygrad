@@ -25,10 +25,6 @@ ALWAYS_CONTIGUOUS: set[Ops] = {Ops.CONTIGUOUS, Ops.AFTER, Ops.BUFFER,
                       Ops.CONST, Ops.MSELECT, Ops.MSTACK, Ops.PARAM,
                       Ops.LOAD, Ops.CALL, Ops.FUNCTION}
 
-# a shaped INDEX carries tensor-valued address srcs: they broadcast against each other and cover
-# the leading dims of the indexed value, the remaining (trailing) dims are covered by ranges
-def is_shaped_index(op:Ops, src:tuple[UOp, ...]) -> bool: return op is Ops.INDEX and any(x.shape for x in src[1:])
-
 def realize(ctx:IndexingContext, tr:UOp) -> None: ctx.realize_map[tr] = None
 
 def realize_srcs(ctx:IndexingContext, rb:UOp) -> None:
@@ -66,7 +62,7 @@ class BufferizeOpts:
 
 def broadcast_rngs(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
   # the buffer of a shaped INDEX is only ranged on its trailing (unindexed) dims,
-  # its leading dims are covered by the coordinate srcs themselves
+  # its leading dims are covered by the index srcs
   if x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape for s in x.src[1:]) and src is x.src[0]:
     return tuple(x.src[1:]) + rngs[len(x.src)-1:]
   if x.op not in GroupOp.Broadcastable: return rngs
@@ -79,9 +75,9 @@ def data_srcs(op:Ops, src:tuple[UOp, ...]) -> tuple[UOp, ...]:
   # the store of a bound Variable only carries the input value, it has no data srcs
   if op is Ops.STORE and src[0].is_variable: return ()
   if op is Ops.INDEX:
-    # the shaped coordinate srcs of a gather are data flow, they compute the address
+    # the shaped index srcs of a gather are data flow, they compute the address
     return src[:1] + tuple(s for s in src[1:] if s.shape != ())
-  if op in GroupOp.Movement|{Ops.INDEX, Ops.STAGE, Ops.REDUCE, Ops.AFTER, Ops.END}: return src[:1]
+  if op in GroupOp.Movement|{Ops.STAGE, Ops.REDUCE, Ops.AFTER, Ops.END}: return src[:1]
   return src
 
 def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
@@ -93,11 +89,14 @@ def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
     src_rngs = broadcast_rngs(x, s, ctx.range_map[x][0]) if x in ctx.range_map else ()
     if s.op in {Ops.PARAM, Ops.BUFFER, Ops.MSTACK, Ops.MSELECT, Ops.AFTER}:
       # NOTE: for a shaped INDEX, src_rngs can be shorter than the buffer shape when the movement
-      # chain below already folded the coordinate srcs into the address. don't index again
+      # chain below already folded the index srcs into a single flat index. don't index again
       if x in ctx.range_map and i < data_src_count and len(src_rngs) == len(s.shape):
         new_src = new_src.index(*src_rngs)
     elif s in ctx.realize_map and (i < data_src_count or s.op is Ops.STORE):
-      # NOTE: the i gate keeps shape/bound args out, STORE srcs of AFTER still take their ENDs
+      import os
+      if os.environ.get('TRACE_GATE'): print('STAGEING:', s.op.name, 'consumer:', x.op.name)
+      # NOTE: the i gate keeps shape/bound args out (a realized shape arg must never be staged),
+      # STORE srcs of AFTER still take their ENDs
       realized_ranges = ctx.realize_map[s]
       assert isinstance(realized_ranges, list), "realize map must contain range list"
       closed_ranges = tuple([r for i,r in enumerate(ctx.range_map[s][1]) if i in realized_ranges])
@@ -111,7 +110,7 @@ def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
         opts = BufferizeOpts(device=s.device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
                BufferizeOpts(device=s.device, addrspace=AddrSpace.LOCAL, removable=removable)
         new_src = UOp(Ops.STAGE, src=(new_src,)+closed_ranges, arg=opts)
-        if x in ctx.range_map and i < data_src_count: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
+        if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
     new_srcs.append(new_src)
   return new_srcs
 
@@ -150,13 +149,16 @@ def convert_stack_to_where(ctx:IndexingContext, x:UOp):
 def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
 
-# after apply, an INDEX whose buffer already consumed the address through its own INDEX (or a cast
-# above it) is a pure wrapper: the access happened inside that node, this one goes away
+# after apply, a gather (marked INDEX) whose buffer src consumed the address is a pure wrapper
+# and goes away. view-ish buffer srcs keep the INDEX, later passes fold those (pm_mops)
+# after apply, an INDEX whose buffer is an emitted access (an INDEX, casts commute with the
+# gather) is a pure wrapper: the address already folded into that access, the node goes away
 def lower_gather_index(ctx:IndexingContext, x:UOp) -> UOp|None:
   buf = x.src[0]
   while buf.op in {Ops.CAST, Ops.BITCAST}: buf = buf.src[0]
   return x.src[0] if buf.op is Ops.INDEX else None
 pm_lower_gathers = PatternMatcher([(UPat(Ops.INDEX, name="x", allow_any_len=True), lower_gather_index)])
+
 
 pm_apply_rangeify = PatternMatcher([
   # REDUCE(op, axis) -> REDUCE(op) with ranges
@@ -239,7 +241,8 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
     # treat MSTACK/MSELECT like SINK
     if x.op in {Ops.MSTACK, Ops.MSELECT}: continue
 
-    # ranges never end INSIDE a gather's address srcs: they are consumed elementwise per position
+    # NOTE: ending ranges don't propagate into the address of a gather (an INDEX index src), the
+    # address is consumed elementwise and shouldn't force a realize of its computation
     ending_ranges[x] = sum([ending_ranges.get(u, []) for u in consumer_map[x]
                             if not (u.op is Ops.INDEX and x in u.src[1:])], [])
     # ranges the consumers iterate that this node broadcasts over
@@ -257,7 +260,7 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
     consumer_rngs = []
     for c in consumer_map[x]:
       if c not in rctx.range_map: continue
-      # a coordinate src of a shaped INDEX broadcasts against the gathered dims like an ALU operand
+      # an index src of a shaped INDEX broadcasts against the gathered output dims like an ALU operand
       if c.op is Ops.INDEX and len(c.src) > 1 and x in c.src[1:] and x.shape != ():
         big_shape = _broadcast_shape(*(s.shape for s in c.src[1:]))
         baxes, nleft = broadcast_axes(x.shape, big_shape), len(big_shape)-len(x.shape)
@@ -328,9 +331,10 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
 
     rngs = out_rngs  # rngs is the input ranges  # pylint: disable=possibly-used-before-assignment
 
-    # a shaped INDEX covers the leading dims of its buffer with the coordinate srcs instead of
-    # ranges. a producer holding a REDUCE can't fold the address math into it: realize that
-    # producer's root and read the gather straight out of its materialized buffer
+    # a shaped INDEX covers the leading dims of its buffer with the index srcs instead of ranges.
+    # a producer containing a REDUCE can't fold the address (the reduce machinery works on
+    # ranges): realize its data root and read the gather flat. the toposort gates at AFTER, the
+    # provenance of a realized buffer is already materialized
     if x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape for s in x.src[1:]):
       buf = x.src[0]
       while buf.op in GroupOp.Movement: buf = buf.src[0]
@@ -368,6 +372,7 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
   # NOTE: SPEC=3 is broken here with shape
   with Context(SPEC=min(SPEC.value, 2)):
     tsink = graph_rewrite(tsink, pm_apply_rangeify, ctx=rctx, bottom_up=True, name="apply rangeify")
+    tsink = graph_rewrite(tsink, pm_lower_gathers, ctx=rctx, name="lower gathers")
   # if a deviceless value must materialize, place it on the sink device
   tsink = graph_rewrite(tsink, pm_fix_deviceless, ctx=tsink.device, name="add device to deviceless")
   return tsink
