@@ -124,18 +124,19 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       flat = x.permute(*dims, *kept).reshape((prod(sizes),) + tuple(x.shape[d] for d in kept))
       # the flat index is clamped, but it has to be representable on the underlying buffer
       acc_dtype = dtypes.int64 if flat._uop.base.max_numel() > 2**31-1 else dtypes.int32
-      idxs, valids = [], []
+      # per-dim coordinate emission: each dim gets its own coordinate stream (wrapped negatives,
+      # scaled by its block stride), combined by ordinary elementwise addition over the grid --
+      # no trace-time REDUCE, no combined flat address until the INDEX node itself
+      parts, inb_parts = [], []
       for t, sz, st in zip(tensors, sizes, (prod(sizes[i+1:]) for i in range(len(sizes)))):
-        i = t._broadcast_to(big_shape) if t.shape != big_shape else t
-        i = (i < 0).where(i + sz, i).cast(acc_dtype)   # negative index -> from the end
-        idxs.append(i * st)
-        valids.append((i >= 0) & (i < sz))             # out of bounds reads 0
-      # combine per-dim offsets: ordinary elementwise add over the grid (no trace-time REDUCE),
-      # so codegen never sees a broadened REDUCE that its expand_broadcast cannot reconcile
-      lin = idxs[0]
-      for a in idxs[1:]: lin = lin + a
-      valid = valids[0]
-      for v in valids[1:]: valid = valid & v
+        b = t._broadcast_to(big_shape) if t.shape != big_shape else t
+        w = (b < 0).where(b + sz, b).cast(acc_dtype)   # negative index -> from the end
+        parts.append(w * st)
+        inb_parts.append((w >= 0) & (w < sz))           # out of bounds reads 0 (on wrapped values)
+      lin = parts[0]
+      for a in parts[1:]: lin = lin + a
+      valid = inb_parts[0]
+      for v in inb_parts[1:]: valid = valid & v
       addr = lin.maximum(0).minimum(prod(sizes)-1)._uop.valid(valid._uop)
       # NOTE: this must stay a pure lazy INDEX (no output buffer): the scheduler materializes it
       # (bufferize_to_store) exactly when it can't fuse, and Tensor[idx].uop is t.uop[idx]
