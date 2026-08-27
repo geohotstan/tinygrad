@@ -179,7 +179,13 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     expanded over the whole grid, so flattening pairs positions row-major across ALL entries --
     the cartesian product, not an elementwise broadcast.
     """
-    parts, espans, ai, seen_none = [], [], 0, False
+    # numpy pairing rules on the write grid: all TENSOR index entries broadcast against each
+    # other and share ONE slot block of len(big_shape) (their positions pair elementwise);
+    # every slice window owns its own single cartesian slot. Streams are reshaped into their
+    # slots and expanded over the whole grid, so flattening pairs each position with exactly
+    # one coordinate tuple.
+    layout: list[tuple[str, tuple[int, ...], Self]] = []   # (kind, span, stream)
+    ai, seen_none = 0, False
     for pp in indices_parsed:
       idx_expr = pp['index']
       if idx_expr is None:
@@ -189,31 +195,41 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         b = tensors[ai]._broadcast_to(big_shape)
         sz = self.shape[dims[ai]]
         w = (b < 0).where(b + sz, b)
-        parts.append(w)
-        espans.append(big_shape)
+        # every tensor member joins the shared pairwise block
+        layout.append(("T", tuple(int(x) for x in big_shape), w))
         ai += 1
       elif pp['collapse_dim']:
-        continue  # collapsed ints carry no write-grid axis
+        continue  # collapsed ints own no write-grid axis
       else:
         b0, e_ = pp['boundary']
         st_ = pp['stride']
         length = ceildiv(abs(e_ - b0), abs(st_))
         walk = type(self).arange(length, dtype=dtypes.default_int)
         coord = e_ - 1 - walk * abs(st_) if st_ < 0 else b0 + walk * st_
-        parts.append(coord.cast(dtypes.default_int))
-        espans.append((length,))
+        layout.append(("W", (length,), coord.cast(dtypes.default_int)))
     assert not seen_none, "None injection is not supported inside advanced setitem"
-    if len(parts) != self.ndim: raise IndexError("advanced setitem coordinate layout does not match tensor rank")
+    if len(layout) != self.ndim: raise IndexError("advanced setitem coordinate layout does not match tensor rank")
 
-    grid_tuple: list[int] = []
-    for esh in espans: grid_tuple.extend(int(x) for x in esh)
+    # build the grid once: shared block sizes from the first 'T', one entry per window
+    grid: list[int] = []
+    grid_done_T = False
+    for kind, span, _s in layout:
+      if kind == "T":
+        if not grid_done_T:
+          grid.extend(int(x) for x in span)
+          grid_done_T = True
+      else:
+        grid.append(int(span[0]))
+
+    def placed(slot:int, c:Self, span:tuple[int, ...]) -> Self:
+      rest = len(grid) - slot - len(span)
+      return c.reshape((1,) * slot + tuple(int(x) for x in span) + (1,) * rest).expand(tuple(grid))
+
     outs = []
-    lead = 0
-    for c, esh in zip(parts, espans):
-      trail = len(grid_tuple) - lead - len(esh)
-      shape_ix = (1,) * lead + tuple(int(x) for x in esh) + (1,) * trail
-      outs.append(c.reshape(shape_ix).expand(tuple(grid_tuple)))
-      lead += len(esh)
+    slot = 0
+    for kind, span, stream in layout:
+      outs.append(placed(0 if kind == "T" else slot, stream, span))
+      slot += len(span)
     return outs
 
   def _in_bounds(self, streams:list[Self]) -> Self:
