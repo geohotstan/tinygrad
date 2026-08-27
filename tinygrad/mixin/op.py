@@ -105,7 +105,11 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if tops := [(d, p) for d, p in enumerate(x_dims) if is_adv(p['index'])]:
       dims, tensors = [d for d, _ in tops], [p['index'] for _, p in tops]
       big_shape = _broadcast_shape(*(t.shape for t in tensors))
-      if v is not None: raise NotImplementedError("advanced setitem is not implemented")
+      if v is not None:
+        # direct write: every output position stores through its own resolved coordinates
+        streams = self._advanced_streams(indices_parsed, dims, tensors, big_shape)
+        gate = self._in_bounds(streams) & self._winners(streams)
+        return self._commit_writes(streams, v, gate)
       assert all(isinstance(x.shape[d], int) for d in dims), "does not support symbolic shape"
       kept = tuple(d for d in range(x.ndim) if d not in dims)
       # advanced dims to the front, flattened to one dim. the INDEX covers that dim, kept dims are unindexed
@@ -148,6 +152,105 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     vb = vb.flip(tuple(d for d, m in enumerate(mops) if m['stride'] < 0))
     vb = vb.pad(tuple((m['boundary'][0], self.shape[d] - m['boundary'][1]) for d, m in enumerate(mops)))
     return (type(self).uprod(*per_dim) if per_dim else type(self).const(True)).where(vb, self)
+
+  # ***** direct writes: loop over the written positions and store each value at its coordinates *****
+
+  def _strides(self) -> tuple[int, ...]:
+    return tuple(prod(self.shape[i + 1:]) for i in range(self.ndim))
+
+  def _axis_streams(self, dim:int, index:Self) -> list[Self]:
+    """Coordinate streams for a scatter along `dim`: index values on `dim`, walking positions elsewhere."""
+    out = []
+    for d in range(self.ndim):
+      if d == dim:
+        out.append(index.cast(dtypes.default_int))
+      else:
+        w = type(self).arange(index.shape[d], dtype=index.dtype)
+        out.append(w.reshape((1,) * d + (index.shape[d],) + (1,) * (index.ndim - d - 1)).expand(index.shape))
+    return out
+
+  def _advanced_streams(self, indices_parsed:list[dict], dims:list[int], tensors:list[Self], big_shape:tuple) -> list[Self]:
+    """
+    Coordinate streams for a direct write: picked values on indexed dims (negatives wrapped),
+    strided window walks elsewhere, constants for collapsed ints -- one stream per dim of self.
+    """
+    parts, ai, seen_none = [], 0, False
+    for pp in indices_parsed:
+      idx_expr = pp['index']
+      if idx_expr is None:
+        seen_none = True
+        continue
+      if pp['collapse_dim']:
+        parts.append(type(self).const(dtypes.default_int, pp['boundary'][0]))
+        continue
+      if isinstance(idx_expr, OpMixin):
+        b = tensors[ai]._broadcast_to(big_shape)
+        sz = self.shape[dims[ai]]
+        w = (b < 0).where(b + sz, b)
+        parts.append(w)
+        ai += 1
+      else:
+        b0, e_, st_ = pp['boundary']
+        length = ceildiv(abs(e_ - b0), abs(st_))
+        walk = type(self).arange(length, dtype=dtypes.default_int)
+        coord = e_ - 1 - walk * abs(st_) if st_ < 0 else b0 + walk * st_
+        parts.append(coord.cast(dtypes.default_int))
+    assert not seen_none, "None injection is not supported inside advanced setitem"
+    if len(parts) != self.ndim: raise IndexError("advanced setitem coordinate layout does not match tensor rank")
+    grid = _broadcast_shape(*(c.shape for c in parts))
+    # align each stream onto the shared write grid
+    outs = []
+    for c in parts:
+      padn = len(grid) - c.ndim
+      outs.append(c.reshape((1,) * padn + c.shape).expand(grid))
+    return outs
+
+  def _in_bounds(self, streams:list[Self]) -> Self:
+    ok = type(self).const(True).reshape((1,) * streams[0].ndim).expand(streams[0].shape)
+    for c, sz in zip(streams, self.shape):
+      ok = ok & ((0 <= c) & (c < sz)).cast(dtypes.bool)
+    return ok
+
+  def _winners(self, streams:list[Self]) -> Self:
+    """
+    Survivor mask over the write grid: a position survives if it is the LAST one holding its
+    exact coordinate tuple (duplicate writes collapse to their final occurrence).
+    """
+    flats = [c.reshape((-1,)).cast(dtypes.default_int) for c in streams]
+    pos = type(self).arange(flats[0].numel(), dtype=dtypes.default_int)
+    same = functools.reduce(lambda a,b: a & b, (fi[:, None] == fj[None, :] for fi, fj in zip(flats, flats)), type(self).const(True))
+    later = same & (pos[None, :] < pos[:, None])
+    win = ~later.any(1)
+    return win.reshape(streams[0].shape)
+
+  def _commit_writes(self, streams:list[Self], vals:Self, gate:Self) -> Self:
+    """
+    The shared write commit: one ordered, ungated store per written position against a copy of
+    self carrying one sacrificial cell -- dropped positions (out of bounds or superseded by a
+    later duplicate) are redirected there arithmetically, so last-write-wins falls straight out
+    of store order.
+    """
+    grid = streams[0].shape
+    parts = [c.reshape((-1,)) for c in streams]
+    N = int(parts[0].numel())
+    vflat = vals.cast(self.dtype)._broadcast_to(grid).reshape((-1,))
+    keep = gate._broadcast_to(grid).reshape((-1,))
+    strides = self._strides()
+    size_flat = int(prod(self.shape))
+    pads = tuple((0, 1) if d == 0 else (0, 0) for d in range(self.ndim))
+    staged = self.pad(pads).realize()
+    result = staged._uop
+    dead = size_flat
+    for j in range(N):
+      addr = None
+      for fpart, st in zip(parts, strides):
+        aj = fpart[j] * st
+        addr = aj if addr is None else addr + aj
+      # dropped positions point at the sacrificial cell instead of using a gated store
+      final = keep[j].where(addr.maximum(0).minimum(dead - 1), dead).cast(dtypes.default_int)
+      tgt = result.index(final._uop)
+      result = result.after(tgt.store(vflat[j]._uop))
+    return type(self)(result).shrink(tuple((0, sz) for sz in self.shape))
 
   @classmethod
   def arange(cls, start, stop=None, step=1, dtype:DTypeLike|None=None) -> Self:
@@ -1075,13 +1178,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     assert all((d == dim or self_ >= index_) and src_ >= index_ for d,(self_,index_,src_) in enumerate(zip(self.shape, index.shape, src.shape))), \
       f"All dimensions of {index.shape=} should be <= to all dimensions of {src.shape=} and all dimensions except dimension {dim} of {self.shape=}"
     if self.dtype != src.dtype: raise RuntimeError(f"expect {self.dtype=} to be equal to {src.dtype=}")
-    # shrink src to index shape to shrink away the unused values
-    src = src.shrink_to(index.shape)
-    # prepare src and mask for reduce with respect to dim
-    src = src.unsqueeze(-1).expand(*src.shape, self.shape[dim]).transpose(-1, dim)
-    mask = index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).transpose(-1, dim)
-    # pad src and mask to self.shape so that reduce can be done with padded values as no-ops
-    return src.pad_to(*self.shape, None), mask.pad_to(*self.shape, None)
+    if not dtypes.is_int(index.dtype): raise RuntimeError(f"scatter index dtype must be int, got {index.dtype}")
+    # every write position carries its own value; there is no mask -- drops happen at store time
+    return dim, src.shrink_to(index.shape)
 
   def scatter_reduce(self, dim:int, index:Self, src:Self, reduce:Literal["sum", "prod", "mean", "amax", "amin"],
                      include_self:bool=True) -> Self:
@@ -1113,16 +1212,40 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     print(Tensor([[-10, 20, 0, 5, 10]], dtype=src.dtype).scatter_reduce(0, index, src, reduce='amin').numpy())
     ```
     """
-    src, mask = self._pre_scatter(dim, index, src)
-    def _inv_mask(a:Self|PyConst, b:Self|PyConst) -> Self: return mask.any(-1).logical_not().where(a, b)
-    if reduce == "sum": return mask.where(src, 0).sum(-1).add(self if include_self else _inv_mask(self, 0))
-    if reduce == "prod": return mask.where(src, 1).prod(-1).mul(self if include_self else _inv_mask(self, 1))
-    if reduce == "amax": return mask.where(src, m := src.dtype.min).max(-1).maximum(self if include_self else _inv_mask(self, m))
-    if reduce == "amin": return mask.where(src, m := src.dtype.max).min(-1).minimum(self if include_self else _inv_mask(self, m))
-    if reduce == "mean":
-      count = mask.where(1, 0).sum(-1).add(1 if include_self else _inv_mask(1, 0))
-      return mask.where(src, 0).sum(-1).add(self if include_self else _inv_mask(self, 0)).div(count)
-    raise RuntimeError(f"{reduce=} must be one of 'sum', 'prod', 'mean', 'amax', 'amin'")
+    dim, src = self._pre_scatter(dim, index, src)
+    streams = self._axis_streams(dim, index)
+    grid = streams[0].shape
+    vflat = src.shrink_to(index.shape)._broadcast_to(grid)
+    # collisions among writes resolve among the writes themselves: pairwise-compare, keep each
+    # group's first position as representative and reduce its values there. WHERE keeps
+    # identities out of the arithmetic so inf/nan never meet zero.
+    assert all(isinstance(sz, int) for sz in index.shape), "scatter_reduce needs concrete index shapes"
+    wpos = type(self).arange(index.numel(), dtype=dtypes.default_int)
+    okflat = self._in_bounds(streams).reshape((-1,))
+    flats = [c.reshape((-1,)).cast(dtypes.default_int) for c in streams]
+    valid_pair = functools.reduce(lambda a,b: a & b, (o[:, None] & o[None, :] for o in [okflat]), type(self).const(True))
+    same = functools.reduce(lambda a,b: a & b, (fi[:, None] == fj[None, :] for fi, fj in zip(flats, flats)), type(self).const(True)) & valid_pair
+    first = ~((same & (wpos[None, :] < wpos[:, None])).any(1))
+
+    def grouped(ident, op):
+      return same.where(vflat[None, :].expand(same.shape), ident)._rop(op, (1,))
+    counts = same.cast(dtypes.default_int).sum(1)
+    base = self[list(streams)].reshape((-1,)).cast(src.dtype)
+    if reduce == "sum": combined = grouped(0, Ops.ADD) + base if include_self else grouped(0, Ops.ADD)
+    elif reduce == "prod": combined = grouped(1, Ops.MUL) * base if include_self else grouped(1, Ops.MUL)
+    elif reduce == "amax":
+      m: ConstType = src.dtype.min
+      combined = grouped(m, Ops.MAX).maximum(base) if include_self else grouped(m, Ops.MAX)
+    elif reduce == "amin":
+      m = src.dtype.max
+      combined = grouped(m, Ops.MIN).minimum(base) if include_self else grouped(m, Ops.MIN)
+    elif reduce == "mean":
+      total = grouped(0, Ops.ADD) + base if include_self else grouped(0, Ops.ADD)
+      den = counts + (1 if include_self else 0)
+      combined = total / den.cast(src.dtype)
+    else: raise RuntimeError(f"{reduce=} must be one of 'sum', 'prod', 'mean', 'amax', 'amin'")
+    gate = self._in_bounds(streams) & first.reshape(streams[0].shape)
+    return self._commit_writes(streams, combined.reshape(grid), gate)
 
   def scatter(self, dim:int, index:Self, src:Self|PyConst, reduce:Literal['multiply', 'add']|None=None) -> Self:
     """
@@ -1155,17 +1278,11 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     elif reduce: raise TypeError("non-scalar src is not supported with reduce arg. use scatter_reduce")
     if reduce == "add": return self.scatter_reduce(dim, index, src, "sum", include_self=True)
     if reduce == "multiply": return self.scatter_reduce(dim, index, src, "prod", include_self=True)
-    src, mask = self._pre_scatter(dim, index, src)
-    return self._masked_merge(src, mask, (-1,))
-
-  def _masked_merge(self, values:Self, mask:Self, axes:tuple[int, ...]) -> Self:
-    # reduce such that if mask contains repeated indices the last one remains
-    for dim in reversed(axes):
-      mask, values = functools.reduce(lambda x,y: (x[0]|y[0], y[0].where(y[1], x[1])), zip(mask.split(1, dim), values.split(1, dim)))
-    # remove extra dims from reduce
-    for dim in reversed(axes): mask, values = mask.squeeze(dim), values.squeeze(dim)
-    # select from values for each True element in mask else select from self
-    return mask.where(values, self)
+    dim, src = self._pre_scatter(dim, index, src)
+    # direct write over the write grid; duplicates keep the last value purely by store order
+    streams = self._axis_streams(dim, index)
+    vals = src._broadcast_to(streams[0].shape)
+    return self._commit_writes(streams, vals, self._in_bounds(streams) & self._winners(streams))
 
   def masked_select(self, mask, size:int|None=None, fill_value:ConstType=0):
     """

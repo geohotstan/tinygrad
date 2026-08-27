@@ -702,10 +702,10 @@ class Tensor(RandMixin):
       # __iadd__/__isub__ creates AFTER(view, STORE(view, computed)); unwrap to get the computed value
       if v.uop.op is Ops.AFTER and any(s.op is Ops.STORE for s in v.uop.src[1:]): v = v._apply_uop(lambda x: x.src[1].src[1])
       self.replace(self._getitem(indices, v))
-    elif advanced: # advanced setitem
+    elif advanced: # advanced setitem: the value path builds the fully updated tensor itself
       if is_disk: raise RuntimeError("advanced setitem is not supported for DISK tensors")
       if not isinstance(v, Tensor): v = Tensor(v, device=self.device, dtype=self.dtype)
-      self.assign(self._getitem(indices, v))
+      self.replace(self._getitem(indices, v))
     else: # basic setitem
       view = self[indices]
       if isinstance(v, Tensor) and v.uop.op is Ops.AFTER and v.uop in view.uop.base.src: return
