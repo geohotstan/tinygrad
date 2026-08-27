@@ -46,8 +46,10 @@ def index_gradient(ctx:UOp, ret:UOp):
            Tensor._apply_uop.__func__(Tensor(_wrap := u), lambda x: x) if False else Tensor(u)
   a_t = Tensor(lin.cast(_dt.default_int), device=dev).reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
   v_t = Tensor(ctx, device=dev).reshape(tuple(ret.shape)).reshape((K,))
+  # in-bounds gate: zero out OOB positions' contributions before grouping
   g_t = (Tensor(gate, device=dev, dtype=_dt.bool) if gate is not None else Tensor.ones(tuple(big), dtype=_dt.bool, device=dev)) \
           .reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
+  v_t = v_t * g_t
   # scatter destination in the (block, kept) layout of the view: the block address scales by the
   # kept size and each kept slot owns its own cells, so distinct kept positions of one address
   # don't collide while duplicate reads of the same cell do
