@@ -12,6 +12,12 @@ class IndexingContext:
   realize_map: dict[UOp, None|list[int]] = field(default_factory=dict)
   non_removable: dict[UOp, None] = field(default_factory=dict)
   range_map: dict[UOp, tuple[tuple[UOp, ...], tuple[UOp, ...]]] = field(default_factory=dict)
+  # view-chain nodes of a tensor-coordinate gather: the buffer side is left unindexed by apply
+  # rangeify and folded into the flat read by lower_shaped_gather instead
+  gather_views: set[UOp] = field(default_factory=set)
+  # shaped-gather tag -> its recorded output ranges, for the emission pass
+  shaped_kept: dict[str, tuple[UOp, ...]] = field(default_factory=dict)
+  gather_tag: Iterator[int] = field(default_factory=itertools.count)
 
   # create ranges
   range_idx: Iterator[int] = field(default_factory=itertools.count)
@@ -61,10 +67,9 @@ class BufferizeOpts:
   removable: bool = True
 
 def broadcast_rngs(x:UOp, src:UOp, rngs:tuple[UOp, ...]) -> tuple[UOp, ...]:
-  # the buffer of a gather INDEX is only ranged on its trailing (unindexed) dims,
-  # its leading dims are covered by the coordinate srcs (scalar coords cover one dim each too)
-  if x.op is Ops.INDEX and len(x.src) > 1 and src is x.src[0]:
-    return tuple(x.src[1:]) + rngs[len(x.src)-1:]
+  # NOTE: a gather INDEX is not Broadcastable, so a node on its buffer side inherits its rngs
+  # verbatim; tensor coordinates never appear in rng tuples, they are data flow (see the
+  # shaped-INDEX branch in run_rangeify and lower_shaped_gather)
   if x.op not in GroupOp.Broadcastable: return rngs
   baxes, nleft = broadcast_axes(src.shape, x.shape), len(x.shape)-len(src.shape)
   return tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(rngs) if j >= nleft)
@@ -84,13 +89,25 @@ def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
   new_srcs = []
   # shape/bound/index args that are not data src should not be indexed
   data_src_count = len(data_srcs(x.op, x.src))
+  # a gather with tensor coordinates: the buffer side is read by lower_shaped_gather, which
+  # folds the view chain itself, so nothing on it is pre-indexed here (its rng bookkeeping
+  # carries placeholder ranges, not reads). the coords are data flow, indexed by the coordinate
+  # (big) ranges they are consumed at, never by the gather's buffer-frame rngs
+  shaped_gather = x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape != () for s in x.src[1:])
   for i, s in enumerate(x.src):
     new_src = s
+    is_coord = shaped_gather and i > 0 and s.shape != () and x in ctx.range_map
+    skip = (not is_coord) and (x in ctx.gather_views or shaped_gather)
     src_rngs = broadcast_rngs(x, s, ctx.range_map[x][0]) if x in ctx.range_map else ()
+    if is_coord:
+      big_shape = _broadcast_shape(*(t.shape for t in x.src[1:]))
+      baxes, nleft = broadcast_axes(s.shape, big_shape), len(big_shape)-len(s.shape)
+      out_rngs = ctx.range_map[x][1]
+      src_rngs = tuple(r.const_like(0) if j in baxes else r for j,r in enumerate(out_rngs[:len(big_shape)]) if j >= nleft)
     if s.op in {Ops.PARAM, Ops.BUFFER, Ops.MSTACK, Ops.MSELECT, Ops.AFTER}:
       # NOTE: for a shaped INDEX, src_rngs can be shorter than the buffer shape when the movement
       # chain below already folded the index srcs into a single flat index. don't index again
-      if x in ctx.range_map and i < data_src_count and len(src_rngs) == len(s.shape):
+      if x in ctx.range_map and i < data_src_count and not skip and len(src_rngs) == len(s.shape):
         new_src = new_src.index(*src_rngs)
     elif s in ctx.realize_map and (i < data_src_count or s.op is Ops.STORE):
       import os
@@ -110,20 +127,34 @@ def create_bufferize_and_index_srcs(ctx:IndexingContext, x:UOp) -> list[UOp]:
         opts = BufferizeOpts(device=s.device, removable=removable) if len(ctx.range_map[s][1]) == len(realized_ranges) else \
                BufferizeOpts(device=s.device, addrspace=AddrSpace.LOCAL, removable=removable)
         new_src = UOp(Ops.STAGE, src=(new_src,)+closed_ranges, arg=opts)
-        if x in ctx.range_map: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
+        if x in ctx.range_map and not skip: new_src = new_src.index(*[r for i,r in enumerate(src_rngs) if i in realized_ranges])
     new_srcs.append(new_src)
   return new_srcs
 
 def create_bufferize_and_index_based_on_ranges(ctx:IndexingContext, x:UOp):
   # NOTE: emitted INDEX UOps aren't in range_map, the generic path is a no-op for them
   if x.op is Ops.STAGE: return None
+  shaped = x.op is Ops.INDEX and len(x.src) > 1 and any(s.shape != () for s in x.src[1:])
   new_srcs = create_bufferize_and_index_srcs(ctx, x)
   # a gather INDEX on a flat buffer re-indexes to itself: it IS the emission, don't wrap it in itself
   if any(ns is x for ns in new_srcs): return None
-  return x.replace(src=tuple(new_srcs))
+  ret = x.replace(src=tuple(new_srcs))
+  if x in ctx.gather_views:
+    # a rebuilt view-chain node no longer matches ctx.gather_views by identity: carry the marker
+    # on the tag so remove_movement_op_after_rangeify keeps it for lower_shaped_gather
+    ret = ret.rtag("gather_view")
+  elif shaped and x in ctx.range_map:
+    # hand the recorded output ranges to lower_shaped_gather. the coords may still scalarize in
+    # later rebuilds, so key by tag: a rebuild keeps the tag even as its srcs are finalized
+    key = f"shaped_gather{next(ctx.gather_tag)}"
+    ctx.shaped_kept[key] = ctx.range_map[x][1]
+    ret = ret.rtag(key)
+  return ret
 
 def convert_pad_to_where_to_keep_behavior_local(ctx:IndexingContext, x:UOp):
-  if x not in ctx.range_map: return None
+  # inside a gather's view chain the pad stays a PAD: lower_shaped_gather folds it into the read
+  # as valid-gating (the padded cells read 0), which preserves the padded output frame
+  if x not in ctx.range_map or x in ctx.gather_views: return None
   bx = create_bufferize_and_index_based_on_ranges(ctx, x)
   valid: UOp = UOp.const(True).uprod([r.get_valid() for r in ctx.range_map[x][0]])
   return valid.where(bx.src[0], UOp.const(x.dtype.const(0)))
@@ -147,7 +178,13 @@ def convert_stack_to_where(ctx:IndexingContext, x:UOp):
   return ret
 
 def remove_movement_op_after_rangeify(ctx:IndexingContext, x:UOp):
+  # originals are in range_map. a movement node rebuilt after its srcs were rewritten (e.g. over
+  # a STACK that became a WHERE) is structurally identical and must strip too: its mapping
+  # already lives in the consumers' ranges, and a surviving reshape no longer matches its src
+  if x.tag == "gather_view" or x in ctx.gather_views: return None  # the gather's view chain is folded by lower_shaped_gather
   if x in ctx.range_map or x.src[0].op is Ops.INDEX: return x.src[0]
+  if x.src[0].op not in {Ops.PARAM, Ops.BUFFER, Ops.MSTACK, Ops.MSELECT, Ops.AFTER, Ops.STAGE, Ops.CAST, Ops.BITCAST}:
+    return x.src[0]
 
 # after apply, a gather (marked INDEX) whose buffer src consumed the address is a pure wrapper
 # and goes away. view-ish buffer srcs keep the INDEX, later passes fold those (pm_mops)
@@ -157,7 +194,38 @@ def lower_gather_index(ctx:IndexingContext, x:UOp) -> UOp|None:
   buf = x.src[0]
   while buf.op in {Ops.CAST, Ops.BITCAST}: buf = buf.src[0]
   return x.src[0] if buf.op is Ops.INDEX else None
-pm_lower_gathers = PatternMatcher([(UPat(Ops.INDEX, name="x", allow_any_len=True), lower_gather_index)])
+
+def lower_shaped_gather(ctx:IndexingContext, x:UOp) -> UOp|None:
+  """
+  Emission for a gather with tensor coordinates. The coords are per-dim positions of the buffer
+  view's leading block (each src, scalar or shaped, covers one leading dim; the trailing kept
+  dims stay loop-carried). Fold the coords plus the kept ranges through the buffer's view chain
+  with the movement algebra and emit the flat read of the buffer root, derived from the gather's
+  own block/kept split. No coordinate tensor ever passes through the movement algebra as a range,
+  so reshape splits and broadcast shrinks can't mangle it.
+  """
+  tag = x.tag
+  if x.op is not Ops.INDEX or not isinstance(tag, str) or not tag.startswith("shaped_gather") or tag not in ctx.shaped_kept: return None
+  buf, coords = x.src[0], x.src[1:]
+  if buf.op is Ops.INDEX: return None  # gather over a gather: the rule below owns that
+  chain:list[UOp] = []
+  root = buf
+  while root.op in GroupOp.Movement:
+    chain.append(root)
+    root = root.src[0]
+  # kept ranges: the trailing entries of this gather's recorded output ranges. the coords may
+  # have been scalarized by apply since they were spliced, so slice from the end
+  nkept = len(buf.shape) - len(coords)
+  if nkept < 0: return None
+  out_rngs = ctx.shaped_kept[tag]
+  idxs:list[UOp] = list(coords) + list(out_rngs[len(out_rngs)-nkept:])
+  if len(idxs) != len(buf.shape): return None
+  for m in chain:
+    idxs = list(apply_movement_op(m.op, m.src[0].shape, m.marg, tuple(idxs)))
+  return root.index(*idxs)
+pm_lower_gathers = PatternMatcher([
+  (UPat(Ops.INDEX, name="x", allow_any_len=True), lower_shaped_gather),
+  (UPat(Ops.INDEX, name="x", allow_any_len=True), lower_gather_index)])
 
 
 pm_apply_rangeify = PatternMatcher([
@@ -343,7 +411,36 @@ def run_rangeify(tsink:UOp, debug:bool=False) -> UOp:
         rctx.realize_map[buf] = None
         # the address can't fold through this producer, the STAGE has to survive removal
         rctx.non_removable[buf] = None
-      rngs = tuple(x.src[1:]) + out_rngs[len(_broadcast_shape(*(s.shape for s in x.src[1:]))):]
+      if any(s.shape != () for s in x.src[1:]) and buf.op not in ALWAYS_CONTIGUOUS | {Ops.INDEX} \
+        and buf not in rctx.realize_map:
+        # a tensor-coordinate gather reads its buffer root flat, so a computed (non-buffer) root
+        # must materialize: the flat read targets the STAGE, not the value's producer
+        rctx.realize_map[buf] = None
+        rctx.non_removable[buf] = None
+      for s in x.src[1:]:
+        # a coordinate produced through state (an AFTER) can't fuse its production with the
+        # gather's ranges: realize it so the stateful producer stays its own kernel
+        root = s
+        while root.op in GroupOp.Movement: root = root.src[0]
+        if root not in rctx.realize_map and any(n.op is Ops.AFTER for n in root.toposort(gate=lambda n: n.op is not Ops.AFTER)):
+          rctx.realize_map[root] = None
+          rctx.non_removable[root] = None
+      if any(s.shape != () for s in x.src[1:]):
+        # a tensor coordinate is data flow, not a range: spliced into the rng tuple it would be
+        # broadcast/reshaped by the movement algebra like an ordinary operand (zeroed on shrunk
+        # axes, mis-weighted by reshape splits). give the covered leading dims placeholder
+        # ranges so the view chain's bookkeeping stays shape-consistent, keep the view chain out
+        # of apply-time indexing, and lower the gather to a flat load at emission instead
+        # (lower_shaped_gather)
+        rngs = tuple(rctx.new_range(s) for s in x.src[0].shape[:len(x.src)-1]) \
+             + out_rngs[len(_broadcast_shape(*(s.shape for s in x.src[1:]))):]
+        view = x.src[0]
+        while view.op in GroupOp.Movement:
+          rctx.gather_views.add(view)
+          view = view.src[0]
+      else:
+        # scalar coords cover one leading dim each and are honest rng entries
+        rngs = tuple(x.src[1:]) + out_rngs[len(_broadcast_shape(*(s.shape for s in x.src[1:]))):]
 
     # apply movement ops
     if x.op in GroupOp.Movement: rngs = apply_movement_op(x.op, x.src[0].shape, x.marg, rngs)

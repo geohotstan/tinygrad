@@ -48,6 +48,12 @@ def index_gradient(ctx:UOp, ret:UOp):
   v_t = Tensor(ctx, device=dev).reshape(tuple(ret.shape)).reshape((K,))
   g_t = (Tensor(gate, device=dev, dtype=_dt.bool) if gate is not None else Tensor.ones(tuple(big), dtype=_dt.bool, device=dev)) \
           .reshape(tuple(big) + (1,) * len(kept)).expand(big + kept).reshape((K,))
+  # scatter destination in the (block, kept) layout of the view: the block address scales by the
+  # kept size and each kept slot owns its own cells, so distinct kept positions of one address
+  # don't collide while duplicate reads of the same cell do
+  kept_pos = Tensor.arange(kept_n, dtype=_dt.default_int).to(dev) \
+    .reshape((1,) * len(big) + kept).expand(big + kept).reshape((K,))
+  a_t = a_t * kept_n + kept_pos
 
   # duplicate destinations: compare positions pairwise, first position of each collision group
   # is the representative and sums the whole group. WHERE keeps identities out of the arithmetic
@@ -63,8 +69,7 @@ def index_gradient(ctx:UOp, ret:UOp):
     ph_a, ph_v, ph_gate = ph_rest[0], ph_rest[1], ph_rest[2]
     j = UOp.range(K, 0)
     live = ph_gate[j]
-    safe = ph_a[j].maximum(0).minimum(block)
-    final = live.where(safe, block).cast(_dt.default_int)
+    final = live.where(ph_a[j].maximum(0).minimum(block*kept_n + kept_n - 1), block*kept_n + j % kept_n).cast(_dt.default_int)
     tgt = ph_zeros.index(final)
     return tgt.store(ph_v[j]).end(j).sink(arg=KernelInfo(name="index_grad", opts_to_apply=()))
   staged_t = staging.custom_kernel(a_t, summed, first, fxn=fxn)[0]
