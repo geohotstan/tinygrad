@@ -334,9 +334,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         aj = pp[j] * st
         addr = aj if addr is None else addr + aj
       # dropped positions point at the sacrificial cell instead of using a gated store
-      final = ph_gate[j].where(addr.maximum(0).minimum(size_flat), size_flat).cast(dtypes.default_int)
+      final = ph_gate[j].cast(dtypes.bool).where(addr.maximum(0).minimum(size_flat), size_flat).cast(dtypes.default_int)
       tgt = ph_staged.index(final)
-      return tgt.store(ph_val[j]).end(j).sink(arg=KernelInfo(name="direct_write", opts_to_apply=()))
+      return tgt.store(ph_val[j].cast(ph_staged.dtype)).end(j).sink(arg=KernelInfo(name="direct_write", opts_to_apply=()))
     outs = staged.custom_kernel(*parts, vflat, keep, fxn=fxn)
     return type(self)(outs[0]._uop.reshape(padded_shape)).shrink(tuple((0, sz) for sz in self.shape))
 
