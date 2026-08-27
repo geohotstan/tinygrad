@@ -92,7 +92,8 @@ expander2 = PatternMatcher([
 def expand_broadcast(x:UOp):
   shapes = [u._shape for u in x.src]
   if any(s is None for s in shapes) or all_same(shapes): return None
-  shape = _broadcast_shape(*shapes)
+  try: shape = _broadcast_shape(*shapes)
+  except IndexError: return None  # irreconcilable: the srcs already iterate the same ranges
   return x.replace(src=tuple([u.expand(shape) for u in x.src]))
 
 def broadcast_and_devec_wmma(b:UOp):
