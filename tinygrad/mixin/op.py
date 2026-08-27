@@ -107,13 +107,20 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       big_shape = _broadcast_shape(*(t.shape for t in tensors))
       if v is not None:
         # direct write: every output position stores through its own resolved coordinates
-        streams = self._advanced_streams(indices_parsed, dims, tensors, big_shape)
+        streams, grid, value_perm = self._advanced_streams(indices_parsed, dims, tensors, big_shape)
         gate = self._in_bounds(streams) & self._winners(streams)
-        return self._commit_writes(streams, v, gate)
+        # bring the value into write-grid layout (numpy orders its dims like the getitem result)
+        vb = v._broadcast_to(value_perm[0]).permute(value_perm[1]) if value_perm is not None \
+          else v._broadcast_to(grid)
+        return self._commit_writes(streams, vb, gate)
       assert all(isinstance(x.shape[d], int) for d in dims), "does not support symbolic shape"
       kept = tuple(d for d in range(x.ndim) if d not in dims)
       # advanced dims to the front, flattened to one dim. the INDEX covers that dim, kept dims are unindexed
       sizes = tuple(x.shape[d] for d in dims)
+      # if the flatten merges or splits dims, the flat coordinate no longer maps onto inline data
+      # (there are no buffer reads for the movement algebra to fold it into): materialize x
+      if (prod(sizes),) + tuple(x.shape[d] for d in kept) != tuple(x.shape[d] for d in list(dims) + list(kept)):
+        x = x.contiguous()
       flat = x.permute(*dims, *kept).reshape((prod(sizes),) + tuple(x.shape[d] for d in kept))
       # the flat index is clamped, but it has to be representable on the underlying buffer
       acc_dtype = dtypes.int64 if flat._uop.base.max_numel() > 2**31-1 else dtypes.int32
@@ -169,7 +176,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         out.append(w.reshape((1,) * d + (index.shape[d],) + (1,) * (index.ndim - d - 1)).expand(index.shape))
     return out
 
-  def _advanced_streams(self, indices_parsed:list[dict], dims:list[int], tensors:list[Self], big_shape:tuple) -> list[Self]:
+  def _advanced_streams(self, indices_parsed:list[dict], dims:list[int], tensors:list[Self], big_shape:tuple) \
+    -> tuple[list[Self], tuple[int, ...], tuple[tuple[int, ...], tuple[int, ...]]|None]:
     """
     Coordinate streams for a direct write: picked values on indexed dims (negatives wrapped),
     strided window walks elsewhere, constants for collapsed ints -- one stream per dim of self.
@@ -178,6 +186,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     contributes big_shape, a slice its window length). Streams are reshaped into those slots and
     expanded over the whole grid, so flattening pairs positions row-major across ALL entries --
     the cartesian product, not an elementwise broadcast.
+
+    Also returns the write grid and, unless the advanced dims already sit in place, the
+    (target shape, permutation) that brings the setitem value (numpy orders its dims like the
+    getitem result: tensor block first) into grid layout.
     """
     # numpy pairing rules on the write grid: all TENSOR index entries broadcast against each
     # other and share ONE slot block of len(big_shape) (their positions pair elementwise);
@@ -199,7 +211,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         layout.append(("T", tuple(int(x) for x in big_shape), w))
         ai += 1
       elif pp['collapse_dim']:
-        continue  # collapsed ints own no write-grid axis
+        # collapsed ints own no write-grid axis: a constant coordinate stream keeps one entry per dim
+        layout.append(("C", (), type(self).const(pp['boundary'][0], dtype=dtypes.default_int)))
       else:
         b0, e_ = pp['boundary']
         st_ = pp['stride']
@@ -218,6 +231,8 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         if not grid_done_T:
           grid.extend(int(x) for x in span)
           grid_done_T = True
+      elif kind == "C":
+        pass  # collapsed ints own no write-grid axis
       else:
         grid.append(int(span[0]))
 
@@ -226,11 +241,39 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       return c.reshape((1,) * slot + tuple(int(x) for x in span) + (1,) * rest).expand(tuple(grid))
 
     outs = []
-    slot = 0
+    slot, tslot = 0, None
     for kind, span, stream in layout:
-      outs.append(placed(0 if kind == "T" else slot, stream, span))
-      slot += len(span)
-    return outs
+      if kind == "T":
+        # the shared tensor block sits at the first tensor entry's position; all members join it there
+        if tslot is None:
+          tslot = slot
+          slot += len(span)
+        outs.append(placed(tslot, stream, span))
+      elif kind == "C":
+        outs.append(placed(slot, stream, span))
+      else:
+        outs.append(placed(slot, stream, span))
+        slot += len(span)
+
+    # value layout: numpy broadcasts the value against the getitem result, which puts the tensor
+    # block first unless the advanced dims are consecutive (then the grid order matches already)
+    in_place = dims[0] != 0 and (len(dims) == 1 or dims == list(range(dims[0], dims[0]+len(dims))))
+    if in_place:
+      value_perm = None
+    else:
+      target = tuple(int(x) for x in big_shape) + tuple(int(sp[0]) for kind, sp, _s in layout if kind == "W")
+      perm: list[int] = []
+      vi, t_taken = len(big_shape), False
+      for kind, _span, _s in layout:
+        if kind == "T":
+          if not t_taken:
+            perm.extend(range(len(big_shape)))
+            t_taken = True
+        elif kind == "W":
+          perm.append(vi)
+          vi += 1
+      value_perm = (target, tuple(perm))
+    return outs, tuple(grid), value_perm
 
   def _in_bounds(self, streams:list[Self]) -> Self:
     ok = type(self).const(True).reshape((1,) * streams[0].ndim).expand(streams[0].shape)
@@ -1173,10 +1216,33 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if index.device is not None and self.device is not None and index.device != self.device:
       raise RuntimeError(f"expected index and self on the same device, {index.device=}, {self.device=}")
     if index.ndim != self.ndim: raise RuntimeError(f"self.ndim must equal index.ndim, {self.ndim=}, {index.ndim=}")
+    if not dtypes.is_int(index.dtype): raise RuntimeError(f"index dtype must be int, got {index.dtype}")
     dim = self._resolve_dim(dim)
     assert all(s >= i for d,(s,i) in enumerate(zip(self.shape, index.shape)) if d != dim), "requires self.shape[d] >= index.shape[d] for all d != dim"
-    x = self.shrink_to(tuple(i if d != dim else None for d,i in enumerate(index.shape))).unsqueeze(-1).transpose(-1, dim)
-    return (index.unsqueeze(-1)._one_hot_along_dim(self.shape[dim]).where(x, 0)).sum(-1, dtype=self.dtype)
+    # move `dim` to the front, build per-dim coordinate streams on the index grid, and compute
+    # the flat address into the moved buffer. the flat INDEX (1-D source, shaped address) gives
+    # the gathered values with OOB reading 0.
+    moved = self.transpose(dim, 0)
+    imoved = index.transpose(dim, 0)
+    out_shape = tuple(int(x) for x in imoved.shape)
+    flat_moved = moved.reshape((-1,))
+    strides = moved._strides()
+    streams = []
+    for d in range(moved.ndim):
+      if d == 0:
+        s = imoved.cast(dtypes.default_int)
+      else:
+        s = type(self).arange(imoved.shape[d], dtype=dtypes.default_int)
+      if d > 0:
+        s = s.reshape((1,)*d + (imoved.shape[d],) + (1,)*(moved.ndim-d-1)).expand(imoved.shape)
+      streams.append(s)
+    addr = None
+    for s, st in zip(streams, strides):
+      term = (s * st).reshape((-1,))
+      addr = term if addr is None else addr + term
+    valid = ((streams[0] >= 0) & (streams[0] < moved.shape[0])).reshape((-1,))
+    out = type(self)._wrap_uop(flat_moved._uop.index(addr._uop.valid(valid._uop)))
+    return out.reshape(out_shape).transpose(0, dim)
 
   def interpolate(self, size:tuple[int, ...], mode:str="linear", align_corners:bool=False) -> Self:
     """
