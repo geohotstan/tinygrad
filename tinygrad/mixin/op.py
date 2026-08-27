@@ -274,9 +274,6 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       final = ph_gate[j].where(addr.maximum(0).minimum(size_flat), size_flat).cast(dtypes.default_int)
       tgt = ph_staged.index(final)
       return tgt.store(ph_val[j]).end(j).sink(arg=KernelInfo(name="direct_write", opts_to_apply=()))
-    import os
-    if os.environ.get('PAIRDBG'):
-        print("PAIRDBG N:", N, "keep:", keep.numpy().tolist(), "vals:", vflat.numpy().tolist())
     outs = staged.custom_kernel(*parts, vflat, keep, fxn=fxn)
     return type(self)(outs[0]._uop.reshape(padded_shape)).shrink(tuple((0, sz) for sz in self.shape))
 
