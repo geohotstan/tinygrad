@@ -50,15 +50,41 @@ def create_schedule(sched_sink:UOp) -> UOp:
             for t in _split_after(st)[0]:
               children.setdefault(t, []).append(k)
               in_degree[k] += 1
-    # WAR deps: a kernel reading buffer state S must run before another write that supersedes S. an AFTER only
-    # supersedes its immediate prior state; join members already present in that prior state are ordering deps, not writes
+    # WAR deps: a kernel reading buffer state S must run before another write that supersedes S.
+    # Multiple STOREs can be anchored on the same prior state S (e.g. interleaved RNG counter updates that
+    # rangeify fuses into one sink). Matching every such sibling independently makes any reader of S mutually
+    # depend with all sibling writers (each writer also matches the others' shared anchor), deadlocking.
+    # So siblings of one anchor form a serialized chain W1->W2->... in sched_sink discovery order
+    # ("last discovered wins"), external readers of S conflict only with the chain head, and a writer's
+    # own kernels are exempt (they already read-modify-write inside their kernel).
+    writes_by_anchor: dict[tuple[int, str], list[tuple[UOp, tuple[UOp, ...]]]] = {}
+    for b, lst in writes.items():
+      for (a, prev_state, write_kernels) in lst:
+        grp = writes_by_anchor.setdefault((id(b), prev_state.key), [])
+        # join nodes can duplicate one logical store under several AFTERs with identical kernel sets
+        if not grp or tuple(grp[-1][1]) != tuple(write_kernels): grp.append((a, write_kernels))
+    anchor_members: dict[tuple[int, str], set[UOp]] = {}
+    for pkey, grp in writes_by_anchor.items():
+      members: set[UOp] = set()
+      for (_, ks) in grp: members.update(ks)
+      anchor_members[pkey] = members
+      for (_, ks_prev), (_, ks_next) in zip(grp, grp[1:]):
+        for t0 in ks_prev:
+          for t1 in ks_next:
+            if not (t1 is t0 or t1 in t0.backward_slice):
+              children.setdefault(t0, []).append(t1)
+              in_degree[t1] += 1
     for u, k, s in reads:
-      for a, prev_state, write_kernels in writes.get(s.buf_uop, []):
-        if a is u or prev_state is not s: continue
-        for t in write_kernels:
-          if t is not k and t not in k.backward_slice:
-            children.setdefault(k, []).append(t)
-            in_degree[t] += 1
+      pkey = (id(s.buf_uop), s.key)
+      grp0 = writes_by_anchor.get(pkey)
+      if grp0 is None or k in anchor_members[pkey]: continue
+      grp = grp0
+      head_after, head_kernels = grp[0]
+      if head_after is u: continue
+      for t in head_kernels:
+        if t is not k and t not in k.backward_slice:
+          children.setdefault(k, []).append(t)
+          in_degree[t] += 1
 
   with cpu_profile(TracingKey("linearize schedule")):
     queue: deque[UOp] = deque(k for k,v in in_degree.items() if v == 0)
@@ -76,6 +102,7 @@ def create_schedule(sched_sink:UOp) -> UOp:
         in_degree[x] -= 1
         if in_degree[x] == 0: queue.append(x)
     if any(in_degree.values()): raise RuntimeError("cycle detected in assign graph")
+
   return UOp(Ops.LINEAR, src=tuple(linearized))
 
 from tinygrad.schedule.memory import memory_plan_rewrite
