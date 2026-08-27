@@ -181,7 +181,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         seen_none = True
         continue
       if pp['collapse_dim']:
-        parts.append(type(self).const(dtypes.default_int, pp['boundary'][0]))
+        parts.append(type(self).const(pp['boundary'][0], dtype=dtypes.default_int))
         continue
       if isinstance(idx_expr, OpMixin):
         b = tensors[ai]._broadcast_to(big_shape)
@@ -1246,20 +1246,23 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     same = functools.reduce(lambda a,b: a & b, (fi[:, None] == fj[None, :] for fi, fj in zip(flats, flats)), type(self).const(True)) & valid_pair
     first = ~((same & (wpos[None, :] < wpos[:, None])).any(1))
 
-    def grouped(ident, op):
-      return same.where(vrow[None, :].expand(same.shape), ident)._rop(op, (1,))
+    def grouped(ident:ConstType, kind:str) -> Self:
+      # WHERE keeps identities out of the arithmetic so inf/nan never meet zero
+      sel = same.where(vrow[None, :].expand(same.shape), ident)
+      return {"sum": lambda x: x.sum(1), "prod": lambda x: x.prod(1),
+              "amax": lambda x: x.max(1), "amin": lambda x: x.min(1)}[kind](sel)
     counts = same.cast(dtypes.default_int).sum(1)
     base = self[list(streams)].reshape((-1,)).cast(src.dtype)
-    if reduce == "sum": combined = grouped(0, Ops.ADD) + base if include_self else grouped(0, Ops.ADD)
-    elif reduce == "prod": combined = grouped(1, Ops.MUL) * base if include_self else grouped(1, Ops.MUL)
+    if reduce == "sum": combined = grouped(0, "sum") + base if include_self else grouped(0, "sum")
+    elif reduce == "prod": combined = grouped(1, "prod") * base if include_self else grouped(1, "prod")
     elif reduce == "amax":
       m: ConstType = src.dtype.min
-      combined = grouped(m, Ops.MAX).maximum(base) if include_self else grouped(m, Ops.MAX)
+      combined = grouped(m, "amax").maximum(base) if include_self else grouped(m, "amax")
     elif reduce == "amin":
       m = src.dtype.max
-      combined = grouped(m, Ops.MIN).minimum(base) if include_self else grouped(m, Ops.MIN)
+      combined = grouped(m, "amin").minimum(base) if include_self else grouped(m, "amin")
     elif reduce == "mean":
-      total = grouped(0, Ops.ADD) + base if include_self else grouped(0, Ops.ADD)
+      total = grouped(0, "sum") + base if include_self else grouped(0, "sum")
       den = counts + (1 if include_self else 0)
       combined = total / den.cast(src.dtype)
     else: raise RuntimeError(f"{reduce=} must be one of 'sum', 'prod', 'mean', 'amax', 'amin'")
