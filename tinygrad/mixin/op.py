@@ -236,9 +236,12 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     before the store kernel runs; grids that cannot fold to host data raise instead.
     """
     from tinygrad.uop.ops import UOp, KernelInfo
-    grid = streams[0].shape
     def host(t:Self) -> Self:
       return type(self)(t.numpy(), device=t.device, dtype=t.dtype)
+    # the destination snapshot executes eagerly like every other write input, so an unrealized
+    # destination cannot leak its internal ranges through the CALL into outer verification
+    src = host(self)
+    grid = streams[0].shape
     parts   = [host(c.reshape((-1,)).cast(dtypes.default_int)) for c in streams]
     v_up    = vals.cast(self.dtype)
     if int(prod(v_up.shape)) != int(prod(grid)): v_up = v_up._broadcast_to(_broadcast_shape(grid, v_up.shape))
@@ -252,7 +255,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     pads = tuple((0, 1) if d == 0 else (0, 0) for d in range(self.ndim))
     padded_shape = tuple(sz + (1 if d == 0 else 0) for d, sz in enumerate(self.shape))
     # the kernel sees one flat staging line: a scalar address must mean one element
-    staged = self.pad(pads).reshape((int(prod(padded_shape)),)).contiguous().realize()
+    staged = src.pad(pads).reshape((int(prod(padded_shape)),)).contiguous().realize()
     def fxn(ph_staged:UOp, *ph_rest:UOp):
       ph_parts, ph_val, ph_gate = list(ph_rest[:-2]), ph_rest[-2], ph_rest[-1]
       j = UOp.range(N, 0)
@@ -1231,6 +1234,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     streams = self._axis_streams(dim, index)
     grid = streams[0].shape
     vflat = src.shrink_to(index.shape)._broadcast_to(grid)
+    vrow  = src.shrink_to(index.shape).reshape((-1,))
     # collisions among writes resolve among the writes themselves: pairwise-compare, keep each
     # group's first position as representative and reduce its values there. WHERE keeps
     # identities out of the arithmetic so inf/nan never meet zero.
@@ -1243,7 +1247,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     first = ~((same & (wpos[None, :] < wpos[:, None])).any(1))
 
     def grouped(ident, op):
-      return same.where(vflat[None, :].expand(same.shape), ident)._rop(op, (1,))
+      return same.where(vrow[None, :].expand(same.shape), ident)._rop(op, (1,))
     counts = same.cast(dtypes.default_int).sum(1)
     base = self[list(streams)].reshape((-1,)).cast(src.dtype)
     if reduce == "sum": combined = grouped(0, Ops.ADD) + base if include_self else grouped(0, Ops.ADD)
