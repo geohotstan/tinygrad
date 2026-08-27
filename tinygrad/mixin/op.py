@@ -173,37 +173,44 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     """
     Coordinate streams for a direct write: picked values on indexed dims (negatives wrapped),
     strided window walks elsewhere, constants for collapsed ints -- one stream per dim of self.
+
+    Every entry owns a contiguous block of write-grid axes equal to its own rank (a tensor group
+    contributes big_shape, a slice its window length). Streams are reshaped into those slots and
+    expanded over the whole grid, so flattening pairs positions row-major across ALL entries --
+    the cartesian product, not an elementwise broadcast.
     """
-    parts, ai, seen_none = [], 0, False
+    parts, espans, ai, seen_none = [], [], 0, False
     for pp in indices_parsed:
       idx_expr = pp['index']
       if idx_expr is None:
         seen_none = True
         continue
-      if pp['collapse_dim']:
-        parts.append(type(self).const(pp['boundary'][0], dtype=dtypes.default_int))
-        continue
       if isinstance(idx_expr, OpMixin):
         b = tensors[ai]._broadcast_to(big_shape)
         sz = self.shape[dims[ai]]
         w = (b < 0).where(b + sz, b)
-        parts.append(w)
-        ai += 1
+        parts.append(w); espans.append(big_shape); ai += 1
+      elif pp['collapse_dim']:
+        continue  # collapsed ints carry no write-grid axis
       else:
         b0, e_ = pp['boundary']
         st_ = pp['stride']
         length = ceildiv(abs(e_ - b0), abs(st_))
         walk = type(self).arange(length, dtype=dtypes.default_int)
         coord = e_ - 1 - walk * abs(st_) if st_ < 0 else b0 + walk * st_
-        parts.append(coord.cast(dtypes.default_int))
+        parts.append(coord.cast(dtypes.default_int)); espans.append((length,))
     assert not seen_none, "None injection is not supported inside advanced setitem"
     if len(parts) != self.ndim: raise IndexError("advanced setitem coordinate layout does not match tensor rank")
-    grid = _broadcast_shape(*(c.shape for c in parts))
-    # align each stream onto the shared write grid
+
+    grid_tuple: list[int] = []
+    for esh in espans: grid_tuple.extend(int(x) for x in esh)
     outs = []
-    for c in parts:
-      padn = len(grid) - c.ndim
-      outs.append(c.reshape((1,) * padn + c.shape).expand(grid))
+    lead = 0
+    for c, esh in zip(parts, espans):
+      trail = len(grid_tuple) - lead - len(esh)
+      shape_ix = (1,) * lead + tuple(int(x) for x in esh) + (1,) * trail
+      outs.append(c.reshape(shape_ix).expand(tuple(grid_tuple)))
+      lead += len(esh)
     return outs
 
   def _in_bounds(self, streams:list[Self]) -> Self:
@@ -267,6 +274,9 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       final = ph_gate[j].where(addr.maximum(0).minimum(size_flat), size_flat).cast(dtypes.default_int)
       tgt = ph_staged.index(final)
       return tgt.store(ph_val[j]).end(j).sink(arg=KernelInfo(name="direct_write", opts_to_apply=()))
+    import os
+    if os.environ.get('PAIRDBG'):
+        print("PAIRDBG N:", N, "keep:", keep.numpy().tolist(), "vals:", vflat.numpy().tolist())
     outs = staged.custom_kernel(*parts, vflat, keep, fxn=fxn)
     return type(self)(outs[0]._uop.reshape(padded_shape)).shrink(tuple((0, sz) for sz in self.shape))
 
