@@ -5,7 +5,7 @@ from tinygrad.mixin.elementwise import ElementwiseMixin
 from tinygrad.mixin.movement import MovementMixin
 from tinygrad.mixin.reduce import ReduceMixin
 from tinygrad.uop import Ops
-from tinygrad.uop.ops import _broadcast_shape, resolve, smax, smin, identity_element
+from tinygrad.uop.ops import AxisType, _broadcast_shape, resolve, smax, smin, identity_element
 from tinygrad.dtype import ConstType, DType, DTypeLike, Invalid, PyConst, dtypes, least_upper_dtype, sum_acc_dtype, to_dtype
 from tinygrad.helpers import all_int, argfix, argsort, ceildiv, flatten, flat_to_grouped, fully_flatten, get_shape, make_tuple, merge_dicts, prod
 from tinygrad.helpers import resolve_pool_pads, round_up, IMAGE, FLOAT16, WINO
@@ -108,7 +108,7 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       if v is not None:
         # direct write: every output position stores through its own resolved coordinates
         streams, grid, value_perm = self._advanced_streams(indices_parsed, dims, tensors, big_shape)
-        gate = self._in_bounds(streams) & self._winners(streams)
+        gate = self._in_bounds(streams)
         # bring the value into write-grid layout (numpy orders its dims like the getitem result)
         vb = v._broadcast_to(value_perm[0]).permute(value_perm[1]) if value_perm is not None \
           else v._broadcast_to(grid)
@@ -285,28 +285,16 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
       ok = ok & ((0 <= c) & (c < sz)).cast(dtypes.bool)  # type: ignore[operator]
     return ok
 
-  def _winners(self, streams:list[Self]) -> Self:
-    """
-    Survivor mask over the write grid: a position survives if it is the LAST one holding its
-    exact coordinate tuple (duplicate writes collapse to their final occurrence).
-    """
-    flats = [c.reshape((-1,)).cast(dtypes.default_int) for c in streams]
-    pos = type(self).arange(flats[0].numel(), dtype=dtypes.default_int)
-    same = functools.reduce(lambda a,b: a & b, (fi[:, None].eq(fj[None, :]) for fi, fj in zip(flats, flats)), type(self).const(True))
-    # a position dies when a LATER position writes the same coordinates
-    superseded = same & (pos[None, :] > pos[:, None])
-    win = ~superseded.any(1)
-    return win.reshape(streams[0].shape)
-
   def _commit_writes(self, streams:list[Self], vals:Self, gate:Self) -> Self:
     """
-    The shared write commit: one ordered, ungated store per written position against a copy of
-    self carrying one sacrificial cell -- dropped positions (out of bounds or superseded by a
-    later duplicate) are redirected there arithmetically, so last-write-wins falls straight out
-    of store order.
+    The shared write commit: one ordered loop over the write grid, storing each position's value
+    at its coordinates. Positions dropped by the gate (out of bounds) are redirected to one
+    sacrificial staging cell; duplicate destinations keep the last value in the loop, so
+    last-write-wins falls straight out of store order.
 
-    The write grid (coordinates, values, survivor gate) executes eagerly into plain buffers
-    before the store kernel runs; grids that cannot fold to host data raise instead.
+    The write grid (coordinates, values, gate) executes eagerly into plain device buffers before
+    the store kernel is built -- custom_kernel takes buffer arguments -- while the staging copy
+    and the store itself stay lazy.
     """
     from tinygrad.uop.ops import UOp, KernelInfo
     # pin the input graphs before any host read: realize-time replacement (Tensor side) rewires
@@ -322,9 +310,6 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
         data = Tensor(t).numpy()
         return Tensor(data, device=t.device, dtype=t.dtype).uop.contiguous()
       except Exception: return t.contiguous()
-    # the destination snapshot executes eagerly like every other write input, so an unrealized
-    # destination cannot leak its internal ranges through the CALL into outer verification
-    src = host(xu)
     grid = streams[0].shape
     parts   = [host(c.reshape((-1,)).cast(dtypes.default_int)) for c in su]
     v_up    = vu.cast(xu.dtype)
@@ -339,10 +324,12 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     pads = tuple((0, 1) if d == 0 else (0, 0) for d in range(self.ndim))
     padded_shape = tuple(sz + (1 if d == 0 else 0) for d, sz in enumerate(self.shape))
     # the kernel sees one flat staging line: a scalar address must mean one element
-    staged = src.pad(pads).reshape((int(prod(padded_shape)),)).contiguous()
+    staged = xu.pad(pads).reshape((int(prod(padded_shape)),)).contiguous()
     def fxn(ph_staged:UOp, *ph_rest:UOp):
       ph_parts, ph_val, ph_gate = list(ph_rest[:-2]), ph_rest[-2], ph_rest[-1]
-      j = UOp.range(N, 0)
+      # the write grid is a sequential loop, not a parallel axis: two positions writing the same
+      # coordinates resolve to the last one because the stores happen in loop order
+      j = UOp.range(N, 0, AxisType.LOOP)
       addr = ph_parts[0][j] * strides[0]
       for pp, st in zip(ph_parts[1:], strides[1:]): addr = addr + pp[j] * st
       # dropped positions point at the sacrificial cell instead of using a gated store
@@ -1403,10 +1390,10 @@ class OpMixin(ElementwiseMixin, ReduceMixin):
     if reduce == "add": return self.scatter_reduce(dim, index, src, "sum", include_self=True)
     if reduce == "multiply": return self.scatter_reduce(dim, index, src, "prod", include_self=True)
     dim, src = self._pre_scatter(dim, index, src)
-    # direct write over the write grid; duplicates keep the last value purely by store order
+    # direct write over the write grid; duplicates keep the last value purely by loop order
     streams = self._axis_streams(dim, index)
     vals = src._broadcast_to(streams[0].shape)
-    return self._commit_writes(streams, vals, self._in_bounds(streams) & self._winners(streams))
+    return self._commit_writes(streams, vals, self._in_bounds(streams))
 
   def masked_select(self, mask, size:int|None=None, fill_value:ConstType=0):
     """
